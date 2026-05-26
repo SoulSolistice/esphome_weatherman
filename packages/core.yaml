@@ -1,0 +1,220 @@
+## ======================================================================
+## core.yaml — infrastructure
+##
+## Logging, diagnostics hub, safe mode, captive portal, web UI grouping,
+## time, shared globals, and generic device diagnostics.
+## Part of the SoulSolistice/esphome_weatherman package set. Pulled remotely
+## via the `packages:` block in the device entry file; do not edit per-device
+## (override via substitutions / runtime number entities instead).
+## ======================================================================
+
+substitutions:
+  # Default; overridden by the device entry file.
+  timezone: Europe/Berlin
+
+logger:
+  level: DEBUG
+  baud_rate: 0                    # USB is sealed in the box; rely on API/MQTT/web for logs
+  logs:
+    tfa_tx141w: DEBUG             # set to INFO once decoder is locked in
+# Diagnostics hub. Enables the `debug` text_sensor platform (Reset reason,
+# below) and logs device info + the most recent reset reason at every boot.
+# On ESP8266, ESPHome also captures a crash backtrace across warm reboots and
+# replays it at boot over the API — so a watchdog/exception can be diagnosed
+# without a serial cable on the sealed box.
+debug:
+# Safe mode: recovery net if the firmware enters a boot loop (e.g. an I2C
+# wedge that trips the hardware watchdog, or a bad config pushed over OTA).
+# With the `ota: - platform: esphome` structure this is NOT enabled
+# implicitly, so it's declared explicitly here.
+#
+# After `num_attempts` consecutive boots that each fail to stay up past
+# `boot_is_good_after`, the device boots a minimal WiFi + OTA-only image so a
+# fix can be pushed without opening the sealed box. `reboot_timeout` is how
+# long it waits in safe mode before retrying a normal boot, so a transient
+# fault self-heals. The values below are the ESPHome defaults, set explicitly
+# to document intent.
+safe_mode:
+  num_attempts: 10
+  boot_is_good_after: 1min
+  reboot_timeout: 5min
+
+captive_portal:
+## ============================================================
+## WiFi link health
+##
+## Non-secret triggers only — these MERGE (key-by-key) with the secret-bearing
+## wifi: block in the entry file, so the on_connect/on_disconnect logic can live
+## in the package (and ship via upgrades) while ssid/password stay local (§3).
+##
+## This node is placed where RSSI is worse than -68 dBm, so the link drops
+## occasionally and the entry file's `wifi: reboot_timeout` reboots to recover.
+## reset_reason cannot tell a WiFi-driven reboot from any other software restart,
+## so we surface the signal explicitly: on_disconnect bumps a per-session
+## counter, and boot_count (entry file on_boot) tracks reboots. A climbing Boot
+## count preceded by WiFi disconnects identifies a WiFi-driven reboot.
+## ============================================================
+wifi:
+  on_connect:
+    - logger.log:
+        format: "WiFi connected"
+        level: INFO
+  on_disconnect:
+    - lambda: 'id(wifi_disconnect_count) += 1;'
+    - logger.log:
+        format: "WiFi disconnected (#%d this session)"
+        args: ['id(wifi_disconnect_count)']
+        level: WARN
+## ============================================================
+## Web server + entity grouping
+##
+## sorting_groups define collapsible sections in the web UI. Lower
+## sorting_weight values appear first. Each entity below can opt
+## into a group via:
+##   web_server:
+##     sorting_group_id: wsg_weather
+##     sorting_weight: 10
+##
+## Entities NOT assigned to a group land in the default section,
+## which renders BELOW the explicit groups in v3.
+##
+## Note: in web_server v3, an entity's entity_category (config / diagnostic)
+## forces its frontend group and OVERRIDES any sorting_group_id / group
+## weight — these sections always float to the TOP of the local web page and
+## cannot be reordered while entity_category is set (ESPHome issue #6488,
+## still open as of 2026.5). This only affects the device's own web page;
+## Home Assistant places config/diagnostic entities in their proper sections
+## regardless. We keep entity_category for HA's sake and accept the web-page
+## float. See the chat notes for the trade-off if you'd rather reorder the
+## web page instead.
+## ============================================================
+web_server:
+  port: 80
+  version: 3
+  local: true                     # only reachable via mDNS / LAN; no internet exposure
+  sorting_groups:
+    - id: wsg_weather
+      name: "Weather"
+      sorting_weight: 10
+    - id: wsg_comfort
+      name: "Thermal comfort"
+      sorting_weight: 20
+    - id: wsg_wind
+      name: "Wind detail"
+      sorting_weight: 30
+    - id: wsg_pressure
+      name: "Pressure detail"
+      sorting_weight: 40
+    - id: wsg_rain
+      name: "Rain detail"
+      sorting_weight: 50
+    - id: wsg_heater
+      name: "Heater"
+      sorting_weight: 60
+time:
+  - platform: sntp
+    id: ntp_time
+    timezone: ${timezone}
+## ============================================================
+## Globals (for gust tracking and barotrend reference)
+## ============================================================
+globals:
+  - id: wind_gust_max_kmh
+    type: float
+    initial_value: '0.0f'
+    # NOT restored: updated every ~31s when wind packets arrive
+    # (~2,800 writes/day), which would burn through flash wear-leveling
+    # within a couple of years.
+    restore_value: false
+
+  - id: pressure_3h_ago
+    type: float
+    initial_value: 'NAN'
+    # Restored across reboots: only changes every 3 hours (~8 writes/day),
+    # so flash wear is negligible. Preserving it means the barotrend sensor
+    # remains accurate across OTA updates and brief power blips.
+    restore_value: true
+
+  - id: boot_count
+    type: int
+    initial_value: '0'
+    # Restored: incremented once per boot (in the entry file's on_boot). That is
+    # only a handful of writes/day under normal operation, so flash wear is
+    # negligible — and if reboots ever become frequent enough to matter for
+    # flash, that frequency is precisely the signal this counter exists to raise.
+    # A climbing Boot count alongside a short Uptime is the signature of repeated
+    # reboots; at this placement (RSSI < -68 dBm) the dominant cause is the WiFi
+    # link dropping and tripping the 5-min wifi reboot_timeout. Cross-reference
+    # "WiFi disconnects" below to confirm a reboot was WiFi-driven.
+    restore_value: true
+
+  - id: wifi_disconnect_count
+    type: int
+    initial_value: '0'
+    # NOT restored: counts drops within the current boot session only. A flapping
+    # link could write often, so restoring it would risk flash wear for little
+    # gain — cumulative reboot history is captured by boot_count instead.
+    restore_value: false
+sensor:
+  ## --- Diagnostics ---
+  - platform: wifi_signal
+    name: "WiFi RSSI"
+    entity_category: diagnostic
+    update_interval: 60s
+
+  - platform: uptime
+    name: "Uptime"
+    entity_category: diagnostic
+
+  ## --- WiFi-reboot indicator (see the wifi: block and globals above) ---
+  ## Boot count climbs by one each reboot; WiFi disconnects counts link drops in
+  ## the current session. Read together with Uptime and the "Online" status:
+  ## a rising Boot count + recent disconnects + short Uptime ⟹ WiFi-driven
+  ## reboot (which reset_reason reports only as a generic software restart).
+  - platform: template
+    name: "Boot count"
+    id: boot_count_sensor
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    state_class: total_increasing
+    icon: "mdi:restart"
+    update_interval: 60s
+    lambda: 'return id(boot_count);'
+
+  - platform: template
+    name: "WiFi disconnects"
+    id: wifi_disconnects_sensor
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    state_class: total_increasing
+    icon: "mdi:wifi-off"
+    update_interval: 60s
+    lambda: 'return id(wifi_disconnect_count);'
+
+binary_sensor:
+  - platform: status
+    name: "Online"
+    entity_category: diagnostic
+
+text_sensor:
+  ## wm_ip
+  - platform: wifi_info
+    ip_address:
+      name: "IP address"
+      entity_category: diagnostic
+
+  ## Build info
+  - platform: version
+    name: "ESPHome version"
+    entity_category: diagnostic
+
+  ## Reason for the most recent reset. Hardware faults read clearly
+  ## ("Hardware Watchdog", "Exception"); note that all ESPHome-initiated
+  ## software reboots (WiFi/API reboot_timeout, OTA, safe_mode, manual
+  ## restart) report the same generic "Software/System restart" and are not
+  ## distinguished from one another by this string alone — cross-reference
+  ## Uptime and the "Online" status sensor to spot WiFi-driven reboots.
+  - platform: debug
+    reset_reason:
+      name: "Reset reason"
+      entity_category: diagnostic

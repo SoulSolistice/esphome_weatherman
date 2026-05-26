@@ -1,0 +1,35 @@
+## ======================================================================
+## sensor_sht21.yaml — optional SHT21 / HTU21D temp+humidity module
+##
+## Bauanleitung §10. Pulled in ONLY when `sht21_enabled: true` in the entry
+## file, via conditional package inclusion (ESPHome 2025.12+). Because the
+## whole file is gated at include time, nothing in here needs its own enable
+## flag.
+##
+## Part of the SoulSolistice/esphome_weatherman package set. Pulled remotely
+## via the `packages:` block in the device entry file; do not edit per-device.
+## ======================================================================
+
+sensor:
+  ## --- Optional SHT21 / HTU21D (Bauanleitung §10) ---------------------------
+  ## The kit normally reads temp/humidity from the TFA wind head; this is the
+  ## optional shaded I2C temp+humidity module. It's SHT21-compatible, so
+  ## ESPHome's platform is `htu21d` with `model: sht21` (address 0x40, fixed).
+  ## Sits on the same I2C bus declared in sensors_env.yaml.
+  ##
+  ## NOTE: this does NOT re-route the canonical outdoor_temp / outdoor_hum. If
+  ## you want the SHT21 to feed those (it's better-sited — shaded, not
+  ## sun-biased — than the wind-head NTC), point the outdoor_temp template in
+  ## sensors_env.yaml at sht21_temp and have derived.yaml read sht21_hum.
+  - platform: htu21d
+    model: sht21
+    temperature:
+      name: "SHT21 temperature"
+      id: sht21_temp
+      web_server:
+        sorting_group_id: wsg_comfort
+        sorting_weight: 5
+    humidity:
+      name: "SHT21 humidity"
+      id: sht21_hum
+    update_interval: 30s

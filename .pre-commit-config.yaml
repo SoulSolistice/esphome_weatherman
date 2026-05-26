@@ -1,0 +1,45 @@
+# pre-commit orchestrates every linter/formatter in one place, so `pre-commit
+# run --all-files` locally matches exactly what CI runs. Install once with
+# `pip install pre-commit && pre-commit install`.
+#
+# Pin versions for reproducible results; bump them deliberately.
+repos:
+  # Generic hygiene: the "no trailing blanks / consistent line endings /
+  # newline at EOF" requirements, applied to ALL file types (YAML, Python,
+  # C++, Markdown), not just YAML.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-merge-conflict
+      - id: check-yaml
+        # ESPHome uses custom tags (!secret, !include, !lambda); let the YAML
+        # syntax check allow them rather than fail on construction.
+        args: [--unsafe]
+      - id: check-added-large-files
+
+  # YAML style/format (indentation, trailing spaces, line length, etc.).
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.35.1
+    hooks:
+      - id: yamllint
+        args: [--strict, -c, .yamllint]
+
+  # Python lint + format for the component codegen.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  # C++ formatting for the tfa_tx141w component.
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v19.1.5
+    hooks:
+      - id: clang-format
+        types_or: [c++, c]

@@ -1,0 +1,366 @@
+## ======================================================================
+## rain_heater.yaml — rain detection + heater control
+##
+## Rain bucket + comb sensors, rain detector, the PWM heater output, the
+## auto-mode switch, calibration/threshold settings, and control loops.
+## Part of the SoulSolistice/esphome_weatherman package set. Pulled remotely
+## via the `packages:` block in the device entry file; do not edit per-device
+## (override via substitutions / runtime number entities instead).
+## ======================================================================
+
+sensor:
+  ## --- Rain bucket: tipping rate and lifetime total ---
+  ## Counts both edges with a 250 ms debounce. Same config works for both
+  ## bucket variants:
+  ##   - Modified bucket (Bauanleitung §9): one edge per tip → counted.
+  ##   - Unmodified WH-SP-RG: REED briefly closes (~20-80 ms) per tip
+  ##     producing two edges close together; the second is filtered out.
+  ## Net: 1 count per tip in both cases, so the mm-per-tick calibration
+  ## (from cfg_rain_mm_per_tick above) is correct either way.
+  - platform: pulse_counter
+    id: rain_bucket_counter
+    pin:
+      number: 14
+      mode:
+        input: true
+        pullup: true
+    name: "Rain rate"               # wm_regenstaerke
+    unit_of_measurement: "mm/h"
+    accuracy_decimals: 2
+    state_class: measurement
+    icon: "mdi:weather-pouring"
+    update_interval: 60s
+    web_server:
+      sorting_group_id: wsg_weather
+      sorting_weight: 40
+    count_mode:
+      rising_edge: INCREMENT
+      falling_edge: INCREMENT
+    internal_filter: 250ms
+    filters:
+      ## pulse_counter reports pulses/minute → × mm/tick × 60 = mm/h
+      - lambda: |-
+          return x * id(cfg_rain_mm_per_tick).state * 60.0f;
+    total:
+      id: rain_total_mm
+      name: "Rain total"
+      unit_of_measurement: "mm"
+      accuracy_decimals: 2
+      state_class: total_increasing
+      device_class: precipitation
+      web_server:
+        sorting_group_id: wsg_weather
+        sorting_weight: 45
+      filters:
+        - lambda: |-
+            return x * id(cfg_rain_mm_per_tick).state;
+
+  ## --- Rain comb edge rate (transitions per second on GPIO15) ---
+  ## See docs/hardware-rain-sensor.md for the circuit analysis and the
+  ## drip test that determines whether this Hz metric or the duty-cycle
+  ## metric below is the right wetness signal. Both are exposed until
+  ## the test resolves it.
+  - platform: pulse_counter
+    id: rain_comb_edges
+    name: "Rain comb edge rate"
+    pin:
+      number: 15
+      mode:
+        input: true
+      # Note: ignore_strapping_warning is an ESP32-only option. On ESP8266
+      # the ESPHome validator doesn't warn about strapping pin usage at
+      # all, so no equivalent suppression is needed (and the field can't
+      # appear here — it would fail config validation).
+    unit_of_measurement: "Hz"
+    accuracy_decimals: 1
+    state_class: measurement
+    icon: "mdi:sine-wave"
+    update_interval: 10s
+    web_server:
+      sorting_group_id: wsg_rain
+      sorting_weight: 20
+    count_mode:
+      rising_edge: INCREMENT
+      falling_edge: INCREMENT
+    internal_filter: 0us            # no debouncing - capture every transition
+    filters:
+      - multiply: 0.01666667         # pulses/min → Hz
+
+  ## --- Rain comb duty cycle (wm_regensensor_wert candidate) ---
+  ## Published by the 100 ms sampling interval at the bottom of the file.
+  - platform: template
+    name: "Rain sensor value"       # wm_regensensor_wert
+    id: rain_sensor_value
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    state_class: measurement
+    icon: "mdi:water-percent"
+    update_interval: never
+    web_server:
+      sorting_group_id: wsg_rain
+      sorting_weight: 10
+
+number:
+  - platform: template
+    name: "Rain bucket calibration"
+    id: cfg_rain_mm_per_tick
+    icon: "mdi:cup-water"
+    min_value: 0.1
+    max_value: 2.0
+    step: 0.001
+    initial_value: 0.485          # WH-SP-RG modified per Bauanleitung §9
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "mm/tick"
+    mode: box
+    entity_category: config
+
+  - platform: template
+    name: "Rain detector threshold"
+    id: cfg_rain_threshold_pct
+    icon: "mdi:water-percent-alert"
+    min_value: 1
+    max_value: 100
+    step: 1
+    initial_value: 16             # match original firmware regenschwelle
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "%"
+    mode: box
+    entity_category: config
+
+  - platform: template
+    name: "Heater dewpoint margin"
+    id: cfg_dew_threshold_c
+    icon: "mdi:water-thermometer"
+    min_value: 0.5
+    max_value: 10.0
+    step: 0.1
+    initial_value: 2.0
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "°C"
+    mode: box
+    entity_category: config
+
+  - platform: template
+    name: "Heater frost-protect temperature"
+    id: cfg_frost_protect_c
+    icon: "mdi:snowflake-thermometer"
+    min_value: -10.0
+    max_value: 10.0
+    step: 0.5
+    initial_value: 2.0
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "°C"
+    mode: box
+    entity_category: config
+
+  ## Frost-protect transition band: width of the ramp from 100% (at/below the
+  ## frost-protect temperature) down to 0% (this many °C above it). Exposed as a
+  ## runtime number to match the tunable dew margin above; was previously a
+  ## hardcoded 2 °C in the control lambda. If left NaN/0 the lambda falls back to
+  ## a hard cutoff at the frost temperature (still fail-safe, just no ramp).
+  - platform: template
+    name: "Heater frost-protect band"
+    id: cfg_frost_band_c
+    icon: "mdi:snowflake-melt"
+    min_value: 0.5
+    max_value: 10.0
+    step: 0.5
+    initial_value: 2.0
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "°C"
+    mode: box
+    entity_category: config
+
+  ## --- Heater manual duty (separate from auto mode; see switch below) ---
+  ## When auto mode is ON, this slider's value is updated by the auto control
+  ## loop to reflect what the auto logic is driving. Manually moving the
+  ## slider while auto is on has no effect (the next auto cycle overwrites).
+  ## Turn auto OFF first if you want manual control.
+  - platform: template
+    name: "Rain heater duty"
+    id: rain_heater_duty
+    icon: "mdi:radiator"
+    min_value: 0
+    max_value: 100
+    step: 5
+    initial_value: 0
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "%"
+    mode: slider
+    web_server:
+      sorting_group_id: wsg_heater
+      sorting_weight: 10
+    set_action:
+      - if:
+          condition:
+            switch.is_off: rain_heater_auto
+          then:
+            - output.set_level:
+                id: rain_heater_pwm
+                level: !lambda 'return x / 100.0f;'
+
+binary_sensor:
+  ## wm_regenmelder - rain detector (duty-cycle ≥ threshold)
+  ## Threshold is now the runtime cfg_rain_threshold_pct number.
+  ## NOTE: this uses the DUTY CYCLE metric. After the drip test in
+  ## docs/hardware-rain-sensor.md resolves which metric carries signal,
+  ## you may want to switch the lambda to use id(rain_comb_edges).state
+  ## with a different threshold scale (Hz instead of %).
+  - platform: template
+    name: "Rain detector"
+    id: rain_detector
+    device_class: moisture
+    icon: "mdi:weather-rainy"
+    web_server:
+      sorting_group_id: wsg_weather
+      sorting_weight: 35
+    lambda: |-
+      const float v = id(rain_sensor_value).state;
+      const float thr = id(cfg_rain_threshold_pct).state;
+      if (std::isnan(v) || std::isnan(thr)) return false;
+      return v >= thr;
+    filters:
+      - delayed_on:  30s            # require 30s of "wet" before flagging rain
+      - delayed_off: 5min           # 5min of consistent dry before clearing
+
+## ============================================================
+## Heater control
+##
+## Manual: rain_heater_duty (number, 0-100%, defined above with other config)
+## Auto:   rain_heater_auto switch. When on, duty is driven by:
+##           (a) dewpoint margin (anti-dew, mirrors tau_schaltschwelle).
+##               SUPPRESSED during active rain detection — drying out the
+##               comb during rain would suppress the very signal we want
+##               to see.
+##           (b) frost protection below cfg_frost_protect_c.
+##               ALWAYS active regardless of rain detection — critical
+##               for freezing precipitation (snow, freezing rain), where
+##               the first precipitation triggers the rain detector but
+##               the heater still needs to prevent ice buildup on the comb.
+##         The higher of the two duties is applied (std::max).
+##
+## The "rain skips dew" / "rain doesn't skip frost" logic lives INSIDE the
+## auto-control lambda (not as a YAML condition), so the heater always
+## receives an explicit duty cycle each interval. Putting the rain check
+## on the YAML `condition:` would skip the entire `then:` block and let
+## the PWM stay latched at whatever it was previously set to.
+## ============================================================
+output:
+  - platform: esp8266_pwm
+    id: rain_heater_pwm
+    pin: 0                          # T1 BC337 base
+    frequency: 1000 Hz
+    min_power: 0
+    max_power: 1.0
+switch:
+  - platform: template
+    name: "Rain heater auto mode"
+    id: rain_heater_auto
+    icon: "mdi:auto-mode"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    web_server:
+      sorting_group_id: wsg_heater
+      sorting_weight: 20
+    turn_on_action:
+      - logger.log: "Rain heater AUTO enabled"
+    turn_off_action:
+      - logger.log: "Rain heater AUTO disabled - heater forced off"
+      - output.set_level:
+          id: rain_heater_pwm
+          level: 0
+      - number.set:
+          id: rain_heater_duty
+          value: 0
+interval:
+  ## Fast sampling of GPIO15 for the rain comb duty-cycle metric.
+  ## Maintains a 600-sample rolling buffer (= 60 s window at 100 ms).
+  ## Publishes the % HIGH value every 5 s.
+  - interval: 100ms
+    then:
+      - lambda: |-
+          static const size_t N = 600;        // 60s / 100ms
+          static bool buf[N] = {false};
+          static size_t idx = 0;
+          static size_t filled = 0;
+          static uint32_t last_publish = 0;
+          bool wet = digitalRead(15) == HIGH;
+          buf[idx] = wet;
+          idx = (idx + 1) % N;
+          if (filled < N) filled++;
+          uint32_t now = millis();
+          if (now - last_publish >= 5000) {
+            last_publish = now;
+            size_t hi = 0;
+            for (size_t i = 0; i < filled; i++) if (buf[i]) hi++;
+            float pct = (filled > 0) ? (100.0f * hi / filled) : 0.0f;
+            id(rain_sensor_value).publish_state(pct);
+          }
+
+  ## Heater auto control: always evaluates while auto mode is on, so the
+  ## heater always receives an explicit command (no stale state-latch).
+  ##
+  ## All conditional logic — rain detection, NaN guards on sensor inputs —
+  ## lives INSIDE the lambda. A failed condition there results in
+  ## duty = 0 (safe fallback: heater off). The only YAML-level gate is the
+  ## auto-mode switch itself, since "auto off" is the explicit user
+  ## intent for "don't command the heater from here at all" (the switch's
+  ## turn_off_action handles bringing PWM to 0).
+  - interval: 60s
+    then:
+      - if:
+          condition:
+            switch.is_on: rain_heater_auto
+          then:
+            - lambda: |-
+                const float t  = id(outdoor_temp).state;
+                const float dp = id(dewpoint_c).state;
+                const float dew_margin = id(cfg_dew_threshold_c).state;
+                const float frost_t    = id(cfg_frost_protect_c).state;
+                const float frost_band = id(cfg_frost_band_c).state;
+                const bool is_raining  = id(rain_detector).state;
+
+                // Safe fallback if outdoor temperature is unavailable:
+                // command the heater off explicitly. Don't latch at the
+                // last value because that could leave it stuck at 100%.
+                if (std::isnan(t)) {
+                  id(rain_heater_pwm).set_level(0.0f);
+                  id(rain_heater_duty).publish_state(0.0f);
+                  return;
+                }
+
+                // (a) Anti-dew: ramp from 0 (margin away) to 100% (at dewpoint).
+                // Suppressed during rain — drying the comb would suppress the
+                // very signal we want to read. Also suppressed if dewpoint
+                // computation failed (humidity sensor unavailable).
+                float duty_dew = 0.0f;
+                if (!is_raining && !std::isnan(dp) && (t - dp < dew_margin)) {
+                  duty_dew = 1.0f - ((t - dp) / dew_margin);
+                  if (duty_dew < 0.0f) duty_dew = 0.0f;
+                  if (duty_dew > 1.0f) duty_dew = 1.0f;
+                }
+
+                // (b) Frost protect: 100% below threshold, ramps to 0% over the
+                // cfg_frost_band_c transition band above it. Evaluates
+                // UNCONDITIONALLY (apart from temperature NaN, handled above) so
+                // that freezing precipitation still gets the sensor heated before
+                // ice locks the comb. If the band is unset/NaN/0, fall back to a
+                // hard cutoff at frost_t (still fail-safe — heater full below,
+                // off above — just without the soft ramp).
+                float duty_frost = 0.0f;
+                if (t < frost_t) {
+                  duty_frost = 1.0f;
+                } else if (!std::isnan(frost_band) && frost_band > 0.0f &&
+                           t < frost_t + frost_band) {
+                  duty_frost = 1.0f - ((t - frost_t) / frost_band);
+                }
+
+                float duty = std::max(duty_dew, duty_frost);
+                id(rain_heater_pwm).set_level(duty);
+                id(rain_heater_duty).publish_state(duty * 100.0f);

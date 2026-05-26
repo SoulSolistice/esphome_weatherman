@@ -1,0 +1,27 @@
+# Ruff config for the tfa_tx141w component's Python (codegen / config schema).
+#
+# Ruff is the linter+formatter of choice here: it's what ESPHome core itself
+# uses, it's fast, and it bundles flake8, isort and a Black-compatible
+# formatter in one tool. The rule set is deliberately conservative so it
+# enforces real issues and consistent formatting without fighting ESPHome's
+# codegen idioms.
+
+line-length = 120
+target-version = "py39"
+
+[lint]
+# E/W: pycodestyle, F: pyflakes, I: import sorting, UP: pyupgrade,
+# B: flake8-bugbear (real bug patterns).
+select = ["E", "W", "F", "I", "UP", "B"]
+# ESPHome config files commonly import many constants that read as "unused" to
+# a naive linter but are part of the public schema surface; keep F401 on but
+# allow per-file opt-outs below if needed.
+ignore = []
+
+[lint.isort]
+# ESPHome's own import grouping: stdlib, third-party (esphome), first-party.
+known-first-party = ["esphome"]
+
+[format]
+quote-style = "double"
+indent-style = "space"

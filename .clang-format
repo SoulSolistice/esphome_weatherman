@@ -1,0 +1,17 @@
+# C++ formatting for the tfa_tx141w component.
+# Matches ESPHome core's own style so the component stays consistent with the
+# wider ecosystem: Google base, 2-space indent, 120-column limit, pointers bound
+# to the name (`const char *x`).
+---
+BasedOnStyle: Google
+AlignAfterOpenBracket: Align
+AllowShortFunctionsOnASingleLine: Inline
+ColumnLimit: 120
+DerivePointerAlignment: false
+IndentCaseLabels: true
+IndentWidth: 2
+PointerAlignment: Right
+ReflowComments: false
+SortIncludes: false
+SpaceBeforeParens: ControlStatements
+Standard: c++17

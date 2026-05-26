@@ -1,0 +1,473 @@
+## ======================================================================
+## rain_heater.yaml — rain detection + heater control
+##
+## Rain bucket + comb sensors, rain detector, the PWM heater output, the
+## auto-mode switch, calibration/threshold settings, and control loops.
+## Part of the SoulSolistice/esphome_weatherman package set. Pulled remotely
+## via the `packages:` block in the device entry file; do not edit per-device
+## (override via substitutions / runtime number entities instead).
+## ======================================================================
+
+sensor:
+  ## --- Rain bucket: tipping rate and lifetime total ---
+  ## Counts both edges with a 250 ms debounce. Same config works for both
+  ## bucket variants:
+  ##   - Modified bucket (Bauanleitung §9): one edge per tip → counted.
+  ##   - Unmodified WH-SP-RG: REED briefly closes (~20-80 ms) per tip
+  ##     producing two edges close together; the second is filtered out.
+  ## Net: 1 count per tip in both cases, so the mm-per-tick calibration
+  ## (from cfg_rain_mm_per_tick below) is correct either way.
+  - platform: pulse_counter
+    id: rain_bucket_counter
+    pin:
+      number: 14
+      mode:
+        input: true
+        pullup: true
+    name: "Rain rate"               # wm_regenstaerke
+    unit_of_measurement: "mm/h"
+    accuracy_decimals: 2
+    state_class: measurement
+    icon: "mdi:weather-pouring"
+    update_interval: 60s
+    web_server:
+      sorting_group_id: wsg_weather
+      sorting_weight: 40
+    count_mode:
+      rising_edge: INCREMENT
+      falling_edge: INCREMENT
+    internal_filter: 250ms
+    filters:
+      ## pulse_counter reports pulses/minute → × mm/tick × 60 = mm/h
+      - lambda: |-
+          return x * id(cfg_rain_mm_per_tick).state * 60.0f;
+    total:
+      id: rain_total_mm
+      name: "Rain total"
+      unit_of_measurement: "mm"
+      accuracy_decimals: 2
+      state_class: total_increasing
+      device_class: precipitation
+      web_server:
+        sorting_group_id: wsg_weather
+        sorting_weight: 45
+      filters:
+        - lambda: |-
+            return x * id(cfg_rain_mm_per_tick).state;
+
+  ## --- Rain comb: active RC-discharge sense ---
+  ## The comb sense node sits directly on GPIO13 (D7). R6 (100k) ties that
+  ## node to GPIO15 (D8), which carries the WeMos on-board 12k boot pulldown;
+  ## R6 + 12k ≈ 112k forms the fixed bleed. The 2 s interval at the bottom of
+  ## this file drives D7 HIGH to charge C1 (1 nF), releases to INPUT, and times
+  ## the fall below the logic threshold. MEASURED behaviour is inverted from a
+  ## naive comb-to-GND model: a wet comb props the node up and SLOWS the fall,
+  ## so LONGER discharge = wetter. GPIO15 is left undeclared and unread.
+  ## See docs/hardware-rain-sensor.md for the full circuit analysis.
+  - platform: template
+    name: "Rain comb discharge time"   # diagnostic / calibration aid
+    id: rain_comb_us
+    unit_of_measurement: "µs"
+    accuracy_decimals: 1
+    state_class: measurement
+    icon: "mdi:sine-wave"
+    update_interval: never
+    entity_category: diagnostic
+    web_server:
+      sorting_group_id: wsg_rain
+      sorting_weight: 20
+
+  - platform: template
+    name: "Rain sensor value"          # wm_regensensor_wert
+    id: rain_sensor_value
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    state_class: measurement
+    icon: "mdi:water-percent"
+    update_interval: never
+    web_server:
+      sorting_group_id: wsg_rain
+      sorting_weight: 10
+
+number:
+  - platform: template
+    name: "Rain bucket calibration"
+    id: cfg_rain_mm_per_tick
+    icon: "mdi:cup-water"
+    min_value: 0.1
+    max_value: 2.0
+    step: 0.001
+    initial_value: 0.485          # WH-SP-RG modified per Bauanleitung §9
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "mm/tick"
+    mode: box
+    entity_category: config
+
+  - platform: template
+    name: "Rain detector threshold"
+    id: cfg_rain_threshold_pct
+    icon: "mdi:water-percent-alert"
+    min_value: 1
+    max_value: 100
+    step: 1
+    initial_value: 16             # ~=16 us discharge with the cal below; sits
+                                  # comfortably above the ~5-10 us dry floor
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "%"
+    mode: box
+    entity_category: config
+
+  ## --- Rain comb calibration (per-unit; consumed by the 2 s sense interval) ---
+  ## Discharge-time endpoints mapping raw us -> wetness %. LONGER = wetter
+  ## (inverted from a naive comb-to-GND model — see the comb sensor note above).
+  ## Calibrate cfg_comb_dry_us from a confirmed-dry reading of "Rain comb
+  ## discharge time" (heater OFF), and cfg_comb_wet_us from a soaked reading.
+  ## The mapping clamps to 0-100 %, and is divide-by-zero guarded if wet <= dry.
+  - platform: template
+    name: "Rain comb dry baseline"
+    id: cfg_comb_dry_us
+    icon: "mdi:water-off"
+    min_value: 1
+    max_value: 100
+    step: 0.5
+    initial_value: 6              # this unit measured ~5-10 us dry
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "µs"
+    mode: box
+    entity_category: config
+
+  - platform: template
+    name: "Rain comb wet saturation"
+    id: cfg_comb_wet_us
+    icon: "mdi:water"
+    min_value: 10
+    max_value: 600
+    step: 1
+    initial_value: 67             # this unit measured ~67 us soaked
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "µs"
+    mode: box
+    entity_category: config
+
+  - platform: template
+    name: "Heater dewpoint margin"
+    id: cfg_dew_threshold_c
+    icon: "mdi:water-thermometer"
+    min_value: 0.5
+    max_value: 10.0
+    step: 0.1
+    initial_value: 2.0
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "°C"
+    mode: box
+    entity_category: config
+
+  - platform: template
+    name: "Heater frost-protect temperature"
+    id: cfg_frost_protect_c
+    icon: "mdi:snowflake-thermometer"
+    min_value: -10.0
+    max_value: 10.0
+    step: 0.5
+    initial_value: 2.0
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "°C"
+    mode: box
+    entity_category: config
+
+  ## Frost-protect transition band: width of the ramp from 100% (at/below the
+  ## frost-protect temperature) down to 0% (this many °C above it). Exposed as a
+  ## runtime number to match the tunable dew margin above; was previously a
+  ## hardcoded 2 °C in the control lambda. If left NaN/0 the lambda falls back to
+  ## a hard cutoff at the frost temperature (still fail-safe, just no ramp).
+  - platform: template
+    name: "Heater frost-protect band"
+    id: cfg_frost_band_c
+    icon: "mdi:snowflake-melt"
+    min_value: 0.5
+    max_value: 10.0
+    step: 0.5
+    initial_value: 2.0
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "°C"
+    mode: box
+    entity_category: config
+
+  ## --- Rain heating duty (consumed by heater auto-control term (c)) ---
+  ## Duty applied while the rain detector is active — through the whole event
+  ## AND its delayed_off tail — to dry the comb faster and restore readiness for
+  ## the next event. 100% is DC drive (no 1 kHz PWM ripple), the cleanest case
+  ## for the GPIO13 discharge measurement and the fastest dry-off. Lowering it
+  ## reintroduces 1 kHz ripple, which sits just below the ~1.6 kHz R6*C1 corner
+  ## and is only lightly attenuated (~15%), so re-verify the comb reading isn't
+  ## perturbed if you reduce it (the median-of-7 absorbs most of it). Set to 0
+  ## to disable rain-driven
+  ## heating entirely (frost + anti-dew still run).
+  ##
+  ## There is deliberately NO time cap: heating lasts the entire detected-wet
+  ## period (energy cost is small — the heater is low-power). The trade-off is
+  ## that a comb that
+  ## reads wet forever — e.g. a corrosion/leakage fault — would hold the heater
+  ## on indefinitely. If you want a runaway guard, the clean spot is a timed
+  ## script gating this term; ask and it's a few lines.
+  - platform: template
+    name: "Rain heating duty"
+    id: cfg_rain_heat_pct
+    icon: "mdi:hair-dryer"
+    min_value: 0
+    max_value: 100
+    step: 5
+    initial_value: 100
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "%"
+    mode: box
+    entity_category: config
+
+  ## --- Heater manual duty (separate from auto mode; see switch below) ---
+  ## When auto mode is ON, this slider's value is updated by the auto control
+  ## loop to reflect what the auto logic is driving. Manually moving the
+  ## slider while auto is on has no effect (the next auto cycle overwrites).
+  ## Turn auto OFF first if you want manual control.
+  - platform: template
+    name: "Rain heater duty"
+    id: rain_heater_duty
+    icon: "mdi:radiator"
+    min_value: 0
+    max_value: 100
+    step: 5
+    initial_value: 0
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "%"
+    mode: slider
+    web_server:
+      sorting_group_id: wsg_heater
+      sorting_weight: 10
+    set_action:
+      - if:
+          condition:
+            switch.is_off: rain_heater_auto
+          then:
+            - output.set_level:
+                id: rain_heater_pwm
+                level: !lambda 'return x / 100.0f;'
+
+binary_sensor:
+  ## wm_regenmelder — rain detector. FAST, BINARY rain signal for protective
+  ## automations (retract awning, close roof windows). Intensity is NOT derived
+  ## here: comb conductance saturates once a film bridges the traces, so it
+  ## reports presence, not strength — use the rain bucket (mm/h) for intensity.
+  ## rain_sensor_value (%) is only thresholded against cfg_rain_threshold_pct.
+  ## This flag also drives the heater's rain-heating term (see control below).
+  ##
+  ## Asymmetric on/off delays — a missed onset (wet awning) costs more than a
+  ## false trigger (a needless retract):
+  ##   delayed_on  5s   — fast onset; ~2-3 confirmed (median-of-7) samples at the
+  ##                      2 s sense cadence. Rejects a lone splash / dew drop,
+  ##                      trips on real rain in ~5-7 s total. The old 30 s suited
+  ##                      the previous slow duty-cycle metric; the active 2 s
+  ##                      measurement makes that pure dead time now. Lower to
+  ##                      2-3s (and drop the 2 s interval to 1 s) for min latency.
+  ##   delayed_off 2min — conservative clear: stay "wet" (awning retracted, comb
+  ##                      still being heat-dried) until confident it's dry, and
+  ##                      debounce showers. The heater dries the comb AHEAD of the
+  ##                      awning/roof surface, so this hold is what prevents
+  ##                      re-extending into a still-wet world — keep it generous
+  ##                      (raise to 3-5 min in showery climates).
+  - platform: template
+    name: "Rain detector"
+    id: rain_detector
+    device_class: moisture
+    icon: "mdi:weather-rainy"
+    web_server:
+      sorting_group_id: wsg_weather
+      sorting_weight: 35
+    lambda: |-
+      const float v = id(rain_sensor_value).state;
+      const float thr = id(cfg_rain_threshold_pct).state;
+      if (std::isnan(v) || std::isnan(thr)) return false;
+      return v >= thr;
+    filters:
+      - delayed_on: 5s              # fast onset; ~2-3 samples at 2s cadence
+      - delayed_off: 2min           # conservative clear (anti-chatter)
+
+## ============================================================
+## Heater control — duty is the std::max of three sources, evaluated every
+## 60 s while auto mode is on (so the heater always receives an explicit
+## command; no stale state-latch):
+##
+##   (a) Anti-dew      — ramp as (t - dewpoint) approaches cfg_dew_threshold_c.
+##                       Pre-emptive: stops dew forming a film the comb would
+##                       misread as rain. NOT suppressed during rain (the heater
+##                       can't dry the comb out from under active rain anyway, so
+##                       there was nothing to suppress).
+##   (b) Frost protect — 100% below cfg_frost_protect_c, ramping to 0% over
+##                       cfg_frost_band_c above it. Unconditional (temperature
+##                       only) so freezing precip is heated before ice locks the
+##                       comb. Band unset/NaN/0 → hard cutoff at the frost temp.
+##   (c) Rain heating  — cfg_rain_heat_pct while rain is DETECTED, continuing
+##                       through the delayed_off tail after rain stops. Speeds
+##                       dry-off and readiness for the next event. The heater is
+##                       far too low-power to evaporate falling rain — it only
+##                       accelerates drying once rain eases — so it does NOT
+##                       chatter the detector. Runs DURING rain as well as after:
+##                       intentional and accepted (small energy cost, faster
+##                       readiness).
+##
+## Heating runs during AND after rain by design. (a) and (b) need a valid
+## outdoor temperature; if it is NaN they are skipped, but (c) STILL applies —
+## rain heating is independent of the temp sensor (rain is confirmed by the comb,
+## and the heater is galvanically separate from it and too weak to dry it during
+## rain, so it can't corrupt a wet reading), so a dead temp sensor doesn't disable
+## rain-drying. There is no early "temp NaN → force off" return: every path sets
+## an explicit duty, so there is no stale-latch risk. The only YAML-level gate is
+## the auto-mode switch itself (its turn_off_action forces PWM to 0 — the
+## explicit "don't command the heater from here at all").
+## ============================================================
+output:
+  - platform: esp8266_pwm
+    id: rain_heater_pwm
+    pin: 0                          # T1 BC337 base
+    frequency: 1000 Hz
+    min_power: 0
+    max_power: 1.0
+
+switch:
+  - platform: template
+    name: "Rain heater auto mode"
+    id: rain_heater_auto
+    icon: "mdi:auto-mode"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    web_server:
+      sorting_group_id: wsg_heater
+      sorting_weight: 20
+    turn_on_action:
+      - logger.log: "Rain heater AUTO enabled"
+    turn_off_action:
+      - logger.log: "Rain heater AUTO disabled - heater forced off"
+      - output.set_level:
+          id: rain_heater_pwm
+          level: 0
+      - number.set:
+          id: rain_heater_duty
+          value: 0
+
+interval:
+  ## Heater auto control: always evaluates while auto mode is on, so the heater
+  ## always receives an explicit command (no stale state-latch). All gating
+  ## lives INSIDE the lambda; the only YAML gate is the auto-mode switch.
+  - interval: 60s
+    then:
+      - if:
+          condition:
+            switch.is_on: rain_heater_auto
+          then:
+            - lambda: |-
+                const float t  = id(outdoor_temp).state;
+                const float dp = id(dewpoint_c).state;
+                const float dew_margin = id(cfg_dew_threshold_c).state;
+                const float frost_t    = id(cfg_frost_protect_c).state;
+                const float frost_band = id(cfg_frost_band_c).state;
+                const float rain_heat  = id(cfg_rain_heat_pct).state;
+                const bool  is_raining = id(rain_detector).state;
+
+                float duty = 0.0f;
+
+                // (c) Rain heating: heat the comb while rain is DETECTED — through
+                // the event and the delayed_off tail after it stops — for faster
+                // dry-off and quicker readiness. Independent of temperature (rain
+                // is confirmed by the comb; the heater is galvanically separate
+                // from it and can't corrupt a wet reading), so this still works if
+                // the temp sensor is unavailable. The heater is far too low-power
+                // to evaporate falling rain, so it won't chatter the detector.
+                if (is_raining && !std::isnan(rain_heat)) {
+                  float d = rain_heat / 100.0f;
+                  if (d < 0.0f) d = 0.0f;
+                  if (d > 1.0f) d = 1.0f;
+                  duty = std::max(duty, d);
+                }
+
+                // Temperature-dependent terms (frost / dew) need a valid outdoor
+                // temp. If NaN, skip them — but do NOT force the heater off, since
+                // rain heating above may legitimately apply.
+                if (!std::isnan(t)) {
+                  // (a) Anti-dew: ramp from 0 (margin away) to 100% (at dewpoint).
+                  // No longer suppressed during rain.
+                  if (!std::isnan(dp) && (t - dp < dew_margin)) {
+                    float dd = 1.0f - ((t - dp) / dew_margin);
+                    if (dd < 0.0f) dd = 0.0f;
+                    if (dd > 1.0f) dd = 1.0f;
+                    duty = std::max(duty, dd);
+                  }
+                  // (b) Frost protect: 100% below threshold, ramps to 0% over the
+                  // cfg_frost_band_c band above it. Unconditional apart from temp
+                  // NaN (handled here). Band unset/NaN/0 → hard cutoff at frost_t.
+                  float df = 0.0f;
+                  if (t < frost_t) {
+                    df = 1.0f;
+                  } else if (!std::isnan(frost_band) && frost_band > 0.0f &&
+                             t < frost_t + frost_band) {
+                    df = 1.0f - ((t - frost_t) / frost_band);
+                  }
+                  duty = std::max(duty, df);
+                }
+
+                id(rain_heater_pwm).set_level(duty);
+                id(rain_heater_duty).publish_state(duty * 100.0f);
+
+  ## Rain comb sense: charge/discharge timing on GPIO13 (D7). Publishes the raw
+  ## discharge time (us, diagnostic) and the derived wetness % into
+  ## rain_sensor_value (regensensor_wert parity). This is the SOLE writer of
+  ## rain_sensor_value — do not re-add the old passive GPIO15 duty-cycle sampler
+  ## (GPIO15 never goes high through R6+12k, so it only stomps this value to 0
+  ## and breaks the rain_detector delayed_on latch).
+  - interval: 2s
+    then:
+      - lambda: |-
+          const uint8_t PIN = 13;            // GPIO13 / D7 — comb sense node
+          const uint32_t TIMEOUT_US = 600;   // generous; max observed wet ~67 us
+          uint32_t s[7];
+          for (int i = 0; i < 7; i++) {
+            pinMode(PIN, OUTPUT);
+            digitalWrite(PIN, HIGH);
+            delayMicroseconds(120);          // charge C1 (1 nF) hard to Vcc
+            uint32_t dt;
+            {
+              InterruptLock lock;            // clean timing over the short window
+              pinMode(PIN, INPUT);           // release; node bleeds toward rail
+              uint32_t t0 = micros();
+              while (digitalRead(PIN) && (micros() - t0) < TIMEOUT_US) { }
+              dt = micros() - t0;
+            }
+            s[i] = dt;
+            delay(3);                         // let C1 re-settle between samples
+          }
+          for (int a = 0; a < 7; a++)         // median of 7 -> rejects ISR jitter
+            for (int b = a + 1; b < 7; b++)
+              if (s[b] < s[a]) { uint32_t t = s[a]; s[a] = s[b]; s[b] = t; }
+          uint32_t dt = s[3];
+          id(rain_comb_us).publish_state((float) dt);
+
+          // Measured transfer function is INVERTED vs a naive comb-to-GND model:
+          // a wet comb props the sense node up and SLOWS the fall below the
+          // logic threshold, so LONGER discharge = wetter.
+          //   dry comb ~= cfg_comb_dry_us -> 0 %    (this unit: ~6 us)
+          //   wet comb ~= cfg_comb_wet_us -> 100 %  (this unit: ~67 us)
+          // Both endpoints are runtime-calibratable numbers.
+          float dry_us = id(cfg_comb_dry_us).state;
+          float wet_us = id(cfg_comb_wet_us).state;
+          if (std::isnan(dry_us)) dry_us = 6.0f;
+          if (std::isnan(wet_us) || wet_us <= dry_us) wet_us = dry_us + 1.0f;  // /0 guard
+          float wet = 100.0f * ((float) dt - dry_us) / (wet_us - dry_us);
+          if (wet < 0)   wet = 0;
+          if (wet > 100) wet = 100;
+          id(rain_sensor_value).publish_state(wet);

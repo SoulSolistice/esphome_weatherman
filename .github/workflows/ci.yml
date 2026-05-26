@@ -1,0 +1,156 @@
+name: CI
+
+# Compile and lint on every PR and on pushes to main.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Allow manual runs from the Actions tab.
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Lint: run the exact same pre-commit suite developers run locally.
+  # Covers YAML (yamllint), Python (ruff), C++ (clang-format), and generic
+  # hygiene (trailing whitespace, EOF newline, line endings).
+  # ---------------------------------------------------------------------------
+  lint:
+    name: Lint (pre-commit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run pre-commit
+        uses: pre-commit/action@v3.0.1
+
+  # ---------------------------------------------------------------------------
+  # Compile: build the firmware against the IN-REPO packages and component, not
+  # the remote tag — so a PR validates the code it actually changes. The
+  # optional SHT21 is exercised both on and off to cover the conditional-include
+  # branch. A schema regression or a C++ error in the component fails here
+  # before it can reach a tag (and therefore before it can OTA to devices).
+  # ---------------------------------------------------------------------------
+  compile:
+    name: Compile (sht21=${{ matrix.sht21 }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Bare booleans on purpose: written into YAML unquoted below so they
+        # parse as real booleans (a quoted "false" would be truthy in the
+        # Jinja conditional and wrongly include the package).
+        sht21: [true, false]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Cache the PlatformIO toolchain + framework and the ESPHome build dir;
+      # the first run is slow (toolchain download), later runs are fast.
+      - name: Cache PlatformIO and ESPHome build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            .esphome
+          key: pio-${{ runner.os }}-${{ hashFiles('components/tfa_tx141w/**', 'packages/**') }}
+          restore-keys: |
+            pio-${{ runner.os }}-
+
+      - name: Install ESPHome
+        run: |
+          python -m pip install --upgrade pip
+          pip install esphome
+
+      # Generate a CI entry file at the repo root that:
+      #   * uses LOCAL package includes + LOCAL external_components (this PR's
+      #     code), instead of pulling the remote tag;
+      #   * needs no secrets (plain api/ota, no encryption);
+      #   * bakes the matrix sht21 value in as a real YAML boolean.
+      #
+      # `packages:` is a top-level LIST (the mapping/single-include forms are
+      # deprecated as of 2026.7 and the conditional expression is only reliable
+      # as a list entry). For LOCAL includes the SHT21 file is pre-included into
+      # a substitution (`sht21_pkg`), because !include is resolved before the
+      # ${...} expression; the conditional then selects that content or {}.
+      - name: Generate CI config
+        run: |
+          cat > ci-compile.yaml <<EOF
+          substitutions:
+            device_name: weatherman-ci
+            friendly_name: Weatherman CI
+            device_description: "CI build"
+            project_name: "SoulSolistice.esphome_weatherman"
+            timezone: Europe/Berlin
+            board: d1_mini_pro
+            mqtt_broker: "192.0.2.1"
+            mqtt_topic_prefix: "wm"
+            sht21_enabled: ${{ matrix.sht21 }}
+            sht21_pkg: !include packages/sensor_sht21.yaml
+
+          esphome:
+            name: \${device_name}
+            friendly_name: \${friendly_name}
+            comment: \${device_description}
+            min_version: 2025.12.0
+            project:
+              name: \${project_name}
+              version: "ci"
+
+          esp8266:
+            board: \${board}
+            restore_from_flash: true
+
+          # No secrets in CI: plain API (no encryption) and a literal OTA pass.
+          api:
+          ota:
+            - platform: esphome
+              password: "ci-only-not-a-real-secret"
+
+          wifi:
+            ssid: "ci-ssid"
+            password: "ci-password"
+            min_auth_mode: WPA2
+
+          mqtt:
+            broker: \${mqtt_broker}
+            topic_prefix: \${mqtt_topic_prefix}
+
+          packages:
+            - !include packages/core.yaml
+            - !include packages/sensors_tfa.yaml
+            - !include packages/sensors_env.yaml
+            - !include packages/derived.yaml
+            - !include packages/rain_heater.yaml
+            - \${ sht21_enabled and sht21_pkg or {} }
+
+          external_components:
+            - source:
+                type: local
+                path: components
+              components: [tfa_tx141w]
+          EOF
+          echo "----- generated ci-compile.yaml -----"
+          cat ci-compile.yaml
+
+      # `config` first for a fast schema/merge/substitution check with a clear
+      # error surface, then a full `compile` (which also compiles the C++).
+      - name: Validate config
+        run: esphome config ci-compile.yaml
+
+      - name: Compile firmware
+        run: esphome compile ci-compile.yaml

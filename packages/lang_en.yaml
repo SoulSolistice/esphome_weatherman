@@ -1,0 +1,29 @@
+# packages/lang_en.yaml
+#
+# Display NAMES for Weatherman entities (English).
+#
+# Scope: Home Assistant does NOT localize ESPHome entity names — it shows the
+# string provided here verbatim (prefixed with the device's friendly_name).
+# Anything you want translated must therefore live in these packs.
+#
+# Deliberately NOT here (Home Assistant localizes these per viewer):
+#   - units of measurement      -> set via device_class + unit_of_measurement
+#   - enum / binary STATE values -> e.g. a moisture binary_sensor's Wet/Dry
+#   - weather conditions         -> localized by HA on its own
+#
+# Keep this file and lang_de.yaml key-for-key identical; the build picks one.
+
+substitutions:
+  name_temperature:  "Temperature"
+  name_humidity:     "Humidity"
+  name_pressure:     "Pressure"
+  name_wind_speed:   "Wind Speed"
+  name_wind_gust:    "Wind Gust"
+  name_wind_dir:     "Wind Direction"
+  name_rain_rate:    "Rain Rate"
+  name_rain_total:   "Rainfall Total"
+
+  # diagnostic / status entities (names also not localized by HA)
+  name_uptime:       "Uptime"
+  name_wifi_signal:  "Wi-Fi Signal"
+  name_reset_reason: "Reset Reason"

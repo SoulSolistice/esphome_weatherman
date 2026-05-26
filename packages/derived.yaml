@@ -1,0 +1,249 @@
+## ======================================================================
+## derived.yaml — computed meteorological values
+##
+## Dewpoint, humidity, wind chill, apparent temp, heat index, wet bulb,
+## Beaufort, sea-level pressure, 3h pressure change + trend.
+## Part of the SoulSolistice/esphome_weatherman package set. Pulled remotely
+## via the `packages:` block in the device entry file; do not edit per-device
+## (override via substitutions / runtime number entities instead).
+## ======================================================================
+
+sensor:
+  ## --- Derived sensors for wm_* parity ---
+
+  ## wm_taupunkt - dewpoint via Magnus-Tetens
+  - platform: template
+    name: "Dewpoint"
+    id: dewpoint_c
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: 60s
+    web_server:
+      sorting_group_id: wsg_comfort
+      sorting_weight: 10
+    lambda: |-
+      const float t  = id(outdoor_temp).state;
+      const float rh = id(outdoor_hum).state;
+      if (std::isnan(t) || std::isnan(rh) || rh <= 0.0f) return NAN;
+      const float a = 17.625f, b = 243.04f;
+      const float alpha = (a*t)/(b+t) + std::log(rh/100.0f);
+      return (b * alpha) / (a - alpha);
+
+  ## wm_feuchte_abs - absolute humidity g/m³
+  - platform: template
+    name: "Absolute humidity"
+    unit_of_measurement: "g/m³"
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: 60s
+    web_server:
+      sorting_group_id: wsg_comfort
+      sorting_weight: 50
+    lambda: |-
+      const float t  = id(outdoor_temp).state;
+      const float rh = id(outdoor_hum).state;
+      if (std::isnan(t) || std::isnan(rh)) return NAN;
+      return (6.112f * expf(17.67f*t/(t+243.5f)) * rh * 2.1674f) / (273.15f + t);
+
+  ## wm_windchill - NOAA wind chill, valid for T<=10°C and v>=4.8 km/h
+  - platform: template
+    name: "Wind chill"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: 60s
+    web_server:
+      sorting_group_id: wsg_comfort
+      sorting_weight: 30
+    lambda: |-
+      const float t = id(outdoor_temp).state;
+      const float v = id(wind_speed_kmh).state;
+      if (std::isnan(t) || std::isnan(v)) return NAN;
+      if (t > 10.0f || v < 4.8f) return t;
+      const float v16 = powf(v, 0.16f);
+      return 13.12f + 0.6215f*t - 11.37f*v16 + 0.3965f*t*v16;
+
+  ## Apparent Temperature (BoM / Steadman 1994)
+  - platform: template
+    name: "Apparent temperature"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: 60s
+    web_server:
+      sorting_group_id: wsg_comfort
+      sorting_weight: 20
+    lambda: |-
+      const float t  = id(outdoor_temp).state;
+      const float rh = id(outdoor_hum).state;
+      const float v_kmh = id(wind_speed_kmh).state;
+      if (std::isnan(t) || std::isnan(rh) || std::isnan(v_kmh)) return NAN;
+      const float e = (rh / 100.0f) * 6.105f *
+                      expf(17.27f * t / (237.7f + t));
+      const float v_ms = v_kmh / 3.6f;
+      return t + 0.33f * e - 0.70f * v_ms - 4.00f;
+
+  ## Heat Index (NOAA Rothfusz regression)
+  - platform: template
+    name: "Heat index"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: 60s
+    web_server:
+      sorting_group_id: wsg_comfort
+      sorting_weight: 40
+    lambda: |-
+      const float t_c = id(outdoor_temp).state;
+      const float rh  = id(outdoor_hum).state;
+      if (std::isnan(t_c) || std::isnan(rh)) return NAN;
+      if (t_c < 27.0f) return t_c;
+      const float t_f = t_c * 9.0f / 5.0f + 32.0f;
+      float hi_f =
+          -42.379f
+          + 2.04901523f   * t_f
+          + 10.14333127f  * rh
+          - 0.22475541f   * t_f * rh
+          - 0.00683783f   * t_f * t_f
+          - 0.05481717f   * rh  * rh
+          + 0.00122874f   * t_f * t_f * rh
+          + 0.00085282f   * t_f * rh  * rh
+          - 0.00000199f   * t_f * t_f * rh  * rh;
+      if (rh < 13.0f && t_f >= 80.0f && t_f <= 112.0f) {
+        hi_f -= ((13.0f - rh) / 4.0f) *
+                sqrtf((17.0f - fabsf(t_f - 95.0f)) / 17.0f);
+      }
+      else if (rh > 85.0f && t_f >= 80.0f && t_f <= 87.0f) {
+        hi_f += ((rh - 85.0f) / 10.0f) * ((87.0f - t_f) / 5.0f);
+      }
+      return (hi_f - 32.0f) * 5.0f / 9.0f;
+
+  ## Wet Bulb Temperature (Stull 2011 - Analytical approximation)
+  - platform: template
+    name: "Wet bulb temperature"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: 60s
+    web_server:
+      sorting_group_id: wsg_comfort
+      sorting_weight: 60
+    lambda: |-
+      const float t  = id(outdoor_temp).state;
+      const float rh = id(outdoor_hum).state;
+      if (std::isnan(t) || std::isnan(rh) || rh < 1.0f) return NAN;
+      return t * atanf(0.151977f * sqrtf(rh + 8.313659f))
+           + atanf(t + rh)
+           - atanf(rh - 1.676331f)
+           + 0.00391838f * powf(rh, 1.5f) * atanf(0.023101f * rh)
+           - 4.686035f;
+
+  ## wm_windstaerke - Beaufort from wind speed
+  - platform: template
+    name: "Beaufort"
+    state_class: measurement
+    accuracy_decimals: 0
+    icon: "mdi:weather-windy"
+    update_interval: 60s
+    web_server:
+      sorting_group_id: wsg_wind
+      sorting_weight: 30
+    lambda: |-
+      const float v = id(wind_speed_kmh).state;
+      if (std::isnan(v)) return NAN;
+      const float ms = v / 3.6f;
+      return roundf(powf(ms / 0.836f, 2.0f/3.0f));
+
+  ## wm_barometer - sea-level corrected pressure
+  ## Altitude now sourced from the runtime cfg_altitude_m number.
+  - platform: template
+    name: "Barometric pressure (sea level)"
+    id: pressure_sealevel_hpa
+    unit_of_measurement: "hPa"
+    device_class: atmospheric_pressure
+    state_class: measurement
+    accuracy_decimals: 2
+    update_interval: 60s
+    web_server:
+      sorting_group_id: wsg_weather
+      sorting_weight: 30
+    lambda: |-
+      const float p = id(pressure_hpa).state;
+      const float t = id(outdoor_temp).state;
+      const float h = id(cfg_altitude_m).state;
+      if (std::isnan(p) || std::isnan(t) || std::isnan(h)) return NAN;
+      return p * powf(1.0f - (0.0065f*h)/(t+273.15f+0.0065f*h), -5.257f);
+
+  ## Pressure 3-hour change (numeric, for plotting and HA derivative logic)
+  - platform: template
+    name: "Pressure change (3h)"
+    id: pressure_change_3h
+    unit_of_measurement: "hPa"
+    state_class: measurement
+    accuracy_decimals: 2
+    icon: "mdi:gauge"
+    update_interval: 60s
+    web_server:
+      sorting_group_id: wsg_pressure
+      sorting_weight: 10
+    lambda: |-
+      const float now_p = id(pressure_sealevel_hpa).state;
+      const float old_p = id(pressure_3h_ago);
+      if (std::isnan(now_p) || std::isnan(old_p)) return NAN;
+      return now_p - old_p;
+
+text_sensor:
+  ## wm_windrichtung - cardinal wind direction.
+  ## COMMENTED OUT alongside the wind_direction sensor above. Uncomment
+  ## both blocks together if you have the Anemometer variant.
+  # - platform: template
+  #   name: "Wind direction (cardinal)"
+  #   icon: "mdi:compass"
+  #   update_interval: 60s
+  #   web_server:
+  #     sorting_group_id: wsg_wind
+  #     sorting_weight: 40
+  #   lambda: |-
+  #     const float d = id(wind_dir_deg).state;
+  #     if (std::isnan(d)) return std::string("");
+  #     static const char* dirs[8] = {"N","NO","O","SO","S","SW","W","NW"};
+  #     int idx = ((int)((d + 22.5f) / 45.0f)) & 7;
+  #     return std::string(dirs[idx]);
+
+  ## wm_barotrend - meteorological pressure trend (NOAA-style categorization)
+  ## Categories: rapid / steady / slow / stable, signed for rise/fall.
+  ## Boundaries from NOAA/typical meteorological practice:
+  ##   |Δp| > 6.0  hPa/3h: rapid change (storm / fast clearing)
+  ##   |Δp| > 1.35 hPa/3h: steady change (typical front passage)
+  ##   |Δp| > 0.1  hPa/3h: slow change (minor adjustment)
+  ##   otherwise: stable
+  - platform: template
+    name: "Barometric trend"
+    id: baro_trend
+    icon: "mdi:gauge"
+    update_interval: 60s
+    web_server:
+      sorting_group_id: wsg_pressure
+      sorting_weight: 30
+    lambda: |-
+      const float d = id(pressure_change_3h).state;
+      if (std::isnan(d)) return std::string("stabil");
+      const float a = fabsf(d);
+      if (a < 0.1f)  return std::string("stabil");
+      const bool rising = d > 0.0f;
+      if (a > 6.0f)  return std::string(rising ? "schnell steigend" : "schnell fallend");
+      if (a > 1.35f) return std::string(rising ? "steigend" : "fallend");
+      return std::string(rising ? "langsam steigend" : "langsam fallend");
+
+interval:
+  ## Snapshot pressure every 3 hours for barotrend
+  - interval: 3h
+    then:
+      - lambda: |-
+          id(pressure_3h_ago) = id(pressure_sealevel_hpa).state;

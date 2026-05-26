@@ -1,0 +1,247 @@
+## =============================================================================
+## WEATHERMAN 2.1 — ESPHome device entry file
+##
+## Native ESPHome replacement for the closed-source stall.biz firmware.
+## This is the THIN, per-device file: it holds only your identity, secrets,
+## connectivity, and the pointer to the firmware logic. All sensor/heater/
+## decoder logic lives in remote packages pulled from GitHub by tag, so you
+## upgrade by bumping ONE value (weatherman_ref) — no manual YAML merging.
+##
+## What lives where:
+##   - This file (local): identity, !secret-bearing blocks (wifi/api/ota),
+##     and the packages + external_components pointers.
+##   - packages/*.yaml (remote, by tag): all sensors, derived values, rain
+##     + heater control, decoder config. Replaced wholesale on upgrade.
+##   - Tunable thresholds are runtime `number` entities (set in the UI / HA),
+##     not YAML — so they survive upgrades untouched.
+##
+## GPIO map and hardware notes: see docs/ and the package files.
+## =============================================================================
+
+substitutions:
+  ## --- Device identity ---
+  device_name:        weatherman
+  friendly_name:      Weatherman
+  device_description: "Native ESPHome replacement for the closed-source stall.biz firmware of the Weatherman 2.1."
+  ## Project name MUST be "namespace.project" (dot-separated) or validation fails.
+  project_name:       "SoulSolistice.esphome_weatherman"
+  timezone:           Europe/Berlin
+
+  ## --- Display language (en | de) --------------------------------------------
+  ## Selects the language of the entity DISPLAY NAMES. Drives the language pack
+  ## in the packages: files list below (packages/lang_${language}.yaml), so this
+  ## ONE value swaps the whole name vocabulary — same single-knob spirit as
+  ## sht21_enabled. ${language} resolves in the files path exactly as
+  ## ${weatherman_repo}/${weatherman_ref} resolve in url/ref.
+  ##
+  ## NAMES ONLY. Home Assistant does NOT localize ESPHome entity names, so the
+  ## translated strings are shipped in firmware (packages/lang_*.yaml). HA DOES
+  ## localize per viewer — and these are deliberately kept OUT of the packs —
+  ## units (from device_class) and enum/binary STATE values (e.g. a moisture
+  ## binary_sensor's Wet/Dry, weather conditions). Do not translate those here.
+  ##
+  ## A value with no matching pack file (a typo, an unsupported language) fails
+  ## the build with the missing filename rather than silently shipping English.
+  ## To add a language, drop a packages/lang_<code>.yaml with the same keys.
+  language:           de
+
+  ## Board: d1_mini (plain, 4 MB) or d1_mini_pro (Pro, 16 MB). The WEATHERMAN
+  ## PCB accepts either. Pick to MATCH YOUR HARDWARE — the board sets flash
+  ## size and a mismatch is a hard flash error. Beware "Pro" boards that ship
+  ## with only 4 MB flash: those need d1_mini, not d1_mini_pro. When unsure,
+  ## d1_mini (4 MB) is the safe choice and also works on genuine Pro boards.
+  board:              d1_mini_pro
+
+  ## --- MQTT (disabled; also enable the mqtt: block below to use) ---
+  # mqtt_broker:        "xxx.xxx.xxx.xxx"
+  # mqtt_topic_prefix:  "wm"
+
+  ## --- Firmware source -------------------------------------------------------
+  ## Upgrade the whole firmware by bumping weatherman_ref to a new git tag.
+  ## This one value drives BOTH the packages include and the C++ component,
+  ## so there is nothing else to edit or merge on update.
+  weatherman_repo:    "https://github.com/SoulSolistice/esphome_weatherman"
+  weatherman_ref:     "main"      # pin to a tag (e.g. "v0.1") for reproducible builds
+
+  ## --- Optional SHT21 / HTU21D (Bauanleitung §10) ---------------------------
+  ## OFF by default — the kit normally reads temp/humidity from the TFA wind
+  ## head; this is the optional shaded I2C temp+humidity module. It's
+  ## SHT21-compatible, so ESPHome's platform is `htu21d` (address 0x40, fixed).
+  ## To fit and enable it, set `sht21_enabled: true`. The package is pulled
+  ## remotely with the rest of the firmware (see the packages: block below), so
+  ## enabling it needs no local file.
+  ##
+  ## If you want the SHT21 to feed the CANONICAL values, point the outdoor_temp
+  ## template at sht21_temp and have derived.yaml read sht21_hum. Left as a
+  ## manual choice on purpose.
+  sht21_enabled:      false
+
+  ## --- Advanced: TFA decoder timing overrides --------------------------------
+  ## Defaults live in packages/sensors_tfa.yaml. Uncomment here only to override
+  ## for a head with unusual timing (verify against the histogram first).
+  # tfa_pin:         "12"
+  # tfa_debug:       "true"
+  # tfa_t_sync:      "833"
+  # tfa_t_short:     "208"
+  # tfa_t_long:      "417"
+  # tfa_t_tolerance: "200"
+  # tfa_t_reset:     "2000"
+  # tfa_min_sync:    "8"
+
+
+esphome:
+  name:           ${device_name}
+  friendly_name:  ${friendly_name}
+  comment:        ${device_description}
+  ## Conditional package inclusion (the sht21 line in packages: below) requires
+  ## ESPHome 2025.12.0 or newer; this floor makes the requirement explicit and
+  ## fails early on older toolchains instead of mis-parsing the Jinja expression.
+  min_version:    2025.12.0
+  ## Area is COMPILE-TIME firmware metadata, not a runtime entity — it cannot
+  ## be set or changed from the web UI / saved to flash. Empty strings fail
+  ## validation, so it's left commented out. To place the device in an area,
+  ## assign it in Home Assistant (Settings → Devices → this device → Area);
+  ## that lives in HA's registry, persists across reflashes, and is the normal
+  ## workflow. Only uncomment below if you want the area baked into firmware:
+  # area:
+  #   id: weatherman_area
+  #   name: "Garden"
+  project:
+    name: ${project_name}
+    ## Version follows the deployed firmware tag: one source of truth. Because
+    ## project.version reads weatherman_ref (the git tag/branch the packages and
+    ## C++ component were pulled from), the reported version can never drift from
+    ## what's actually flashed. Bump weatherman_ref and the version follows.
+    ## (project.version is a free string; a tag like "v0.1" or "main" both fit.)
+    version: ${weatherman_ref}
+  on_boot:
+    priority: -100
+    then:
+      - logger.log: "Weatherman ESPHome firmware booting"
+      ## Reboot counter for the WiFi-reboot indicator. The global lives in
+      ## core.yaml (with the matching diagnostic sensor); it is incremented here
+      ## because on_boot is owned by the entry file. priority -100 runs late,
+      ## well after restore_value globals are loaded, so the count is preserved.
+      - lambda: 'id(boot_count) += 1;'
+
+esp8266:
+  ## Reads the `board` substitution above so the plain D1 mini and the D1 mini
+  ## Pro are both selectable without editing this block. See the substitution
+  ## comment for the flash-size footgun.
+  board: ${board}
+  restore_from_flash: true
+
+api:
+  encryption:
+    key: !secret esphome-api
+  reboot_timeout: 0min
+
+ota:
+  - platform: esphome
+    password: !secret esphome-ota
+
+wifi:
+  ssid:     !secret wifi-ssid
+  password: !secret wifi-password
+  # WPA2 minimum. Default on ESP8266 is still WPA in ESPHome 2025/2026 but
+  # changes to WPA2 in 2026.6.0; setting explicitly silences the deprecation
+  # warning and locks in the secure default. Drop to WPA only if your router
+  # genuinely doesn't support WPA2 (i.e. the router is from before ~2006).
+  min_auth_mode: WPA2
+  reboot_timeout: 5min
+  ap:
+    ssid:     "${device_name}-recovery"
+    password: !secret wifi-ap-password
+  power_save_mode: none
+
+  # Uncomment for static IP:
+  # manual_ip:
+  #   static_ip: xxx.xxx.xxx.xxx
+  #   gateway:   xxx.xxx.xxx.xxx
+  #   subnet:    255.255.255.0
+  #   dns1:      xxx.xxx.xxx.xxx
+
+# MQTT intentionally disabled — this node reports to Home Assistant over the
+# native (encrypted) API only. Note an `mqtt:` block REQUIRES a `broker:` key
+# (cv.Required), so MQTT cannot be "half-disabled" by dropping the broker —
+# that fails validation — hence the whole block is removed. To re-enable for
+# legacy wm/* topic subscribers, restore this block and the mqtt_broker /
+# mqtt_topic_prefix substitutions (see README / git history).
+# mqtt:
+#   broker: ${mqtt_broker}
+#   topic_prefix: ${mqtt_topic_prefix}
+#   discovery: false
+#   birth_message:
+#     topic: ${mqtt_topic_prefix}/status
+#     payload: online
+#   will_message:
+#     topic: ${mqtt_topic_prefix}/status
+#     payload: offline
+
+
+## ============================================================
+## Firmware logic — pulled from GitHub at ${weatherman_ref}.
+## `refresh` controls how often ESPHome re-checks the ref for a moved
+## branch; irrelevant when ref is a fixed tag. Files merge with the blocks
+## in this entry file (substitutions here override package defaults).
+##
+## `packages:` is a LIST (not a name->package mapping): as of ESPHome 2026.7
+## the single/mapping include forms are deprecated, and the conditional-include
+## expression is only reliable as a top-level list entry. The optional SHT21 is
+## a SECOND git package entry pulling just its one file from the same repo+tag;
+## when sht21_enabled is false the conditional resolves to {} and that entry
+## drops out of the list entirely. This keeps SHT21 remote-by-tag (no local
+## file needed) and off by default.
+##
+## The display-language pack (packages/lang_${language}.yaml) instead rides
+## INSIDE the main files list: unlike SHT21 it is ALWAYS needed, so it requires
+## only path selection, not conditional drop-out. ${language} is resolved in the
+## files path exactly as ${weatherman_repo}/${weatherman_ref} are in url/ref.
+## (SHT21 needs its own conditional entry only because a files-list line cannot
+## remove itself when disabled.)
+## ============================================================
+packages:
+  - url: ${weatherman_repo}
+    ref: ${weatherman_ref}
+    refresh: 1d
+    files:
+      - packages/core.yaml
+      - packages/lang_${language}.yaml   # display names; language selected above
+      - packages/sensors_tfa.yaml
+      - packages/sensors_env.yaml
+      - packages/derived.yaml
+      - packages/rain_heater.yaml
+  - '${ sht21_enabled and {"url":weatherman_repo,"ref":weatherman_ref,"files":["packages/sensor_sht21.yaml"]} or {} }'
+
+## ============================================================
+## For local development against a checkout, comment out the
+## remote package list above and use local includes instead. !include is
+## resolved BEFORE the ${...} expressions, so neither the language pack nor the
+## SHT21 conditional can interpolate into an !include path — pre-include those
+## files via substitutions and choose them with a ${...} expression:
+##   substitutions:
+##     lang_en:   !include packages/lang_en.yaml
+##     lang_de:   !include packages/lang_de.yaml
+##     sht21_pkg: !include packages/sensor_sht21.yaml
+##   packages:
+##     - !include packages/core.yaml
+##     - !include packages/sensors_tfa.yaml
+##     - !include packages/sensors_env.yaml
+##     - !include packages/derived.yaml
+##     - !include packages/rain_heater.yaml
+##     - ${ language == "de" and lang_de or lang_en }
+##     - ${ sht21_enabled and sht21_pkg or {} }
+## ============================================================
+
+## ============================================================
+## TFA TX141W C++ component — same repo + tag as the packages above.
+## For local development against a checkout, swap to:
+##   - source: { type: local, path: ../components }
+##     components: [ tfa_tx141w ]
+## ============================================================
+external_components:
+  - source:
+      type: git
+      url: ${weatherman_repo}
+      ref: ${weatherman_ref}
+    components: [ tfa_tx141w ]

@@ -1,0 +1,211 @@
+## ======================================================================
+## sensors_tfa.yaml — TFA TX141W wind head
+##
+## The TFA decoder component config, wind/humidity/temperature sensors,
+## gust tracking + window, and decoder diagnostics.
+## Part of the SoulSolistice/esphome_weatherman package set. Pulled remotely
+## via the `packages:` block in the device entry file; do not edit per-device
+## (override via substitutions / runtime number entities instead).
+## ======================================================================
+
+substitutions:
+  # TFA decoder timing defaults (protocol-defined). Override in the device
+  # entry file only if your specific head shows unusual timing in the
+  # histogram. All values are integers-as-strings (substitutions are text).
+  tfa_pin:         "12"
+  tfa_t_sync:      "833"
+  tfa_t_short:     "208"
+  tfa_t_long:      "417"
+  tfa_t_tolerance: "200"
+  tfa_t_reset:     "2000"
+  tfa_min_sync:    "8"
+  ## Decoder is locked in (clean histogram, valid CRCs), so the verbose
+  ## per-packet logs AND the periodic histogram/stats (every 10-30s, ESP_LOGI,
+  ## gated by this flag — not the logger level) are OFF to cut log + heap churn.
+  ## Set "true" to re-enable when re-tuning a head against the histogram.
+  tfa_debug:       "false"
+
+## ============================================================
+## TFA Dostmann 30.3222.02 wind head decoder
+## ============================================================
+tfa_tx141w:
+  id:              tfa_wind
+  pin:             ${tfa_pin}
+  debug:           ${tfa_debug}
+  t_sync:          ${tfa_t_sync}
+  t_short:         ${tfa_t_short}
+  t_long:          ${tfa_t_long}
+  t_tolerance:     ${tfa_t_tolerance}
+  t_reset:         ${tfa_t_reset}
+  min_sync_pulses: ${tfa_min_sync}
+sensor:
+  ## --- TFA wind head ---
+  - platform: tfa_tx141w
+    tfa_tx141w_id: tfa_wind
+    temperature:
+      name: "Wind head temperature"
+      id: wind_head_temp
+      entity_category: diagnostic
+      filters:
+        - filter_out: nan
+      ## This is the TFA's internal NTC, inside the (passively vented but
+      ## not aspirated) housing. On calm sunny days it reads 1-2°C high vs.
+      ## a properly shaded probe. The canonical "Outdoor temperature" below
+      ## prefers the DS18B20 reading when available — so the TFA NTC is
+      ## demoted to diagnostic to avoid cluttering the main weather group
+      ## with a redundant reading.
+    humidity:
+      name: "Outdoor humidity"
+      id: outdoor_hum
+      web_server:
+        sorting_group_id: wsg_weather
+        sorting_weight: 20
+      filters:
+        - filter_out: nan
+    wind_speed:
+      name: "Wind speed"
+      id: wind_speed_kmh
+      unit_of_measurement: "km/h"
+      device_class: wind_speed
+      web_server:
+        sorting_group_id: wsg_weather
+        sorting_weight: 60
+      filters:
+        - filter_out: nan
+        ## Capture the TRUE gust here — the raw instantaneous sample, BEFORE the
+        ## smoothing average below. The previous on_value hook fired on the
+        ## already-averaged value and so systematically under-reported gusts
+        ## (wm_wind_spitze is the raw peak, not the peak of the mean). filter_out
+        ## nan precedes this filter, so x is always a real number; the lambda
+        ## returns x unchanged so the smoothing filter still sees every sample.
+        - lambda: |-
+            if (x > id(wind_gust_max_kmh)) id(wind_gust_max_kmh) = x;
+            return x;
+        - sliding_window_moving_average:  # wm_wind_mittel: 5-sample mean
+            window_size: 5
+            send_every: 1
+    ## wind_direction is COMMENTED OUT BY DEFAULT because the TFA Breeze
+    ## (w_station_type:2, what this kit ships with) has no wind vane.
+    ## VAL_B in type-2 packets is always 0, which would publish a
+    ## constant "0°" / cardinal "N" — meaningless noise that pollutes
+    ## HA graphs. UNCOMMENT only if you've upgraded to the Anemometer
+    ## variant (TFA 35.1140.01, w_station_type:3).
+    # wind_direction:
+    #   name: "Wind direction"
+    #   id: wind_dir_deg
+    #   web_server:
+    #     sorting_group_id: wsg_wind
+    #     sorting_weight: 30
+    battery_level:
+      name: "TFA battery"
+      entity_category: diagnostic
+    sensor_id:
+      name: "TFA sensor ID"
+      entity_category: diagnostic
+    packets_valid:
+      name: "TFA packets valid"
+      entity_category: diagnostic
+    packets_invalid:
+      name: "TFA packets invalid"
+      entity_category: diagnostic
+    sync_detections:
+      name: "TFA sync detections"
+      entity_category: diagnostic
+
+  ## --- Wind gust (peak in last N minutes) ---
+  - platform: template
+    name: "Wind gust"               # wm_wind_spitze in km/h
+    unit_of_measurement: "km/h"
+    device_class: wind_speed
+    accuracy_decimals: 1
+    state_class: measurement
+    icon: "mdi:weather-windy-variant"
+    update_interval: 60s
+    web_server:
+      sorting_group_id: wsg_weather
+      sorting_weight: 65
+    lambda: 'return id(wind_gust_max_kmh);'
+
+  - platform: template
+    name: "Wind gust (mps)"
+    unit_of_measurement: "m/s"
+    device_class: wind_speed
+    accuracy_decimals: 1
+    state_class: measurement
+    update_interval: 60s
+    web_server:
+      sorting_group_id: wsg_wind
+      sorting_weight: 20
+    lambda: 'return id(wind_gust_max_kmh) / 3.6f;'
+
+  ## --- Wind speed in m/s (wm_wind_mittel native unit) ---
+  - platform: template
+    name: "Wind speed (mps)"        # wm_wind_mittel
+    unit_of_measurement: "m/s"
+    device_class: wind_speed
+    accuracy_decimals: 1
+    state_class: measurement
+    update_interval: 60s
+    web_server:
+      sorting_group_id: wsg_wind
+      sorting_weight: 10
+    lambda: |-
+      const float v = id(wind_speed_kmh).state;
+      return std::isnan(v) ? NAN : v / 3.6f;
+
+number:
+  ## Wind-gust window: how often the running gust maximum is reset, in
+  ## minutes. Moved from a compile-time substitution to a runtime setting so
+  ## it can be tuned from the UI without editing/re-merging YAML on upgrades.
+  ## The interval that consumes this is a fixed 30s tick (intervals can't be
+  ## reconfigured at runtime), so the effective reset lands within ~30s of the
+  ## window expiring — negligible for typical 5–15 min windows.
+  - platform: template
+    name: "Wind gust window"
+    id: cfg_gust_window_min
+    icon: "mdi:weather-windy"
+    min_value: 1
+    max_value: 60
+    step: 1
+    initial_value: 10
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "min"
+    mode: box
+    entity_category: config
+
+text_sensor:
+  ## TFA decoder status (health only).
+  ## "TFA last packet" (raw hex) was a decoder-tuning aid: a ~65-char string
+  ## rebuilt and re-serialized on EVERY valid packet across the API + web_server
+  ## SSE. The decoder is locked, so it's dropped — one fewer churny heap
+  ## std::string (cf. the 2025-11 event-entity memory-optimization notes:
+  ## std::string is ~24 B overhead + content and fragments the ESP8266 heap).
+  ## "TFA decoder status" is now a low-cardinality token ("OK" / "decode fail:
+  ## …") that the component only RE-publishes on an actual status change (dedup
+  ## added in tfa_tx141w.cpp), so steady state costs ~a handful of
+  ## serializations a day instead of ~2,880. Packet values live on their
+  ## dedicated sensors; decode counts on "TFA packets valid/invalid".
+  - platform: tfa_tx141w
+    tfa_tx141w_id: tfa_wind
+    last_status:
+      name: "TFA decoder status"
+      entity_category: diagnostic
+
+interval:
+  ## Reset wind gust max every cfg_gust_window_min minutes (runtime-tunable).
+  ## Fixed 30s tick + elapsed-time accumulator, because an interval's period
+  ## is fixed at compile time and can't track a number entity directly. The
+  ## millis() subtraction is rollover-safe (unsigned) for any window < ~49 days.
+  - interval: 30s
+    then:
+      - lambda: |-
+          static uint32_t last_reset_ms = 0;
+          const float win_min = id(cfg_gust_window_min).state;
+          if (std::isnan(win_min) || win_min <= 0.0f) return;  // unset/0 disables reset
+          const uint32_t window_ms = (uint32_t)(win_min * 60000.0f);
+          const uint32_t now = millis();
+          if (now - last_reset_ms >= window_ms) {
+            last_reset_ms = now;
+            id(wind_gust_max_kmh) = 0.0f;
+          }

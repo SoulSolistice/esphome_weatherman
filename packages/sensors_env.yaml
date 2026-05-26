@@ -1,0 +1,135 @@
+## ======================================================================
+## sensors_env.yaml — environmental sensors
+##
+## I2C + 1-Wire buses, BMP280 pressure, BH1750 light, DS18B20 outdoor
+## probe, the canonical outdoor temperature, altitude + lux settings.
+## Part of the SoulSolistice/esphome_weatherman package set. Pulled remotely
+## via the `packages:` block in the device entry file; do not edit per-device
+## (override via substitutions / runtime number entities instead).
+## ======================================================================
+
+## ============================================================
+## Buses
+## ============================================================
+i2c:
+  sda: 4
+  scl: 5
+  scan: true
+  frequency: 100kHz
+one_wire:
+  - platform: gpio
+    pin: 2                        # DS18B20 - HIGH-at-boot satisfied by 4.7k pullup
+sensor:
+  ## --- DS18B20 (shaded outdoor probe - canonical outdoor temperature) ---
+  - platform: dallas_temp
+    name: "Outdoor temperature (DS18B20)"
+    id: outdoor_temp_ds18b20
+    # address: ${ds18b20_address}  # uncomment after first-boot log inspection
+    resolution: 12
+    update_interval: 30s
+    entity_category: diagnostic
+
+    ## DS18B20 is the source for the canonical "Outdoor temperature"
+    ## template below. Demoted to diagnostic so the main weather group
+    ## shows only the canonical value, not the raw source.
+
+  ## Canonical outdoor temperature: prefers DS18B20, falls back to wind-head
+  ## NTC if the DS18B20 is missing or returns NaN. All derived sensors
+  ## reference this one.
+  - platform: template
+    name: "Outdoor temperature"
+    id: outdoor_temp
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: 30s
+    web_server:
+      sorting_group_id: wsg_weather
+      sorting_weight: 10
+    lambda: |-
+      const float ds = id(outdoor_temp_ds18b20).state;
+      if (!std::isnan(ds)) return ds;
+      return id(wind_head_temp).state;
+
+  ## --- BMP280 (pressure + box-internal temperature) ---
+  ## Both measurements are INTERNAL to the controller box:
+  ## - Pressure: corresponds closely to local atmospheric pressure
+  ## - Temperature: heated by the WeMos and rain heater; NOT outdoor
+  ##
+  ## Tom's hardware ships with a BMP280, not a BME280 (visually identical
+  ## carrier boards; the chip-level difference is humidity-sensing
+  ## capability). If you've verified yours is a BME280, switch to
+  ## platform: bme280_i2c and add a `humidity:` block — but note the
+  ## humidity reading would be box-internal (heated, sealed) and only
+  ## useful as a water-ingress diagnostic, not as outdoor humidity.
+  - platform: bmp280_i2c
+    address: 0x76
+    temperature:
+      name: "Controller box temperature"
+      id: box_temp
+      entity_category: diagnostic
+    pressure:
+      name: "Barometric pressure (absolute)"
+      id: pressure_hpa
+      web_server:
+        sorting_group_id: wsg_pressure
+        sorting_weight: 20
+    update_interval: 30s
+
+  ## --- BH1750 (illuminance) ---
+  ## Note: the YAML `measurement_time` option was removed from ESPHome's
+  ## BH1750 schema (the MTREG register is now fixed at the datasheet
+  ## default of 69, which gives the standard 1-65535 lx range). If you
+  ## need to extend low-light sensitivity, switch to a different sensor
+  ## (e.g. VEML7700) rather than trying to override MTREG.
+  - platform: bh1750
+    name: "Illuminance"             # wm_lux
+    id: illuminance_lx
+    address: 0x23
+    update_interval: 10s
+    web_server:
+      sorting_group_id: wsg_weather
+      sorting_weight: 50
+
+number:
+  - platform: template
+    name: "Altitude"
+    id: cfg_altitude_m
+    icon: "mdi:image-filter-hdr"
+    min_value: 0
+    max_value: 4000
+    step: 1
+    initial_value: 513            # match original firmware param:20
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "m"
+    mode: box
+    entity_category: config
+
+  - platform: template
+    name: "Sun lux threshold"
+    id: cfg_sun_lux_threshold
+    icon: "mdi:weather-sunny"
+    min_value: 100
+    max_value: 50000
+    step: 100
+    initial_value: 8000           # match original firmware sonne_lux_schwelle
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "lx"
+    mode: box
+    entity_category: config
+
+binary_sensor:
+  ## wm_sonne_scheint - sun above lux threshold (runtime tunable)
+  - platform: template
+    name: "Sun is shining"
+    device_class: light
+    web_server:
+      sorting_group_id: wsg_weather
+      sorting_weight: 55
+    lambda: |-
+      const float v = id(illuminance_lx).state;
+      const float thr = id(cfg_sun_lux_threshold).state;
+      return !std::isnan(v) && !std::isnan(thr) && v > thr;

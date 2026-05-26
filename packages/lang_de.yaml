@@ -1,0 +1,22 @@
+# packages/lang_de.yaml
+#
+# Display NAMES for Weatherman entities (German / Deutsch).
+# See lang_en.yaml for the scope note — names only; units, enum/binary state
+# values and weather conditions are left to Home Assistant's own localization.
+#
+# Keep this file key-for-key identical to lang_en.yaml; the build picks one.
+
+substitutions:
+  name_temperature:  "Temperatur"
+  name_humidity:     "Luftfeuchtigkeit"
+  name_pressure:     "Luftdruck"
+  name_wind_speed:   "Windgeschwindigkeit"
+  name_wind_gust:    "Windböe"
+  name_wind_dir:     "Windrichtung"
+  name_rain_rate:    "Regenrate"
+  name_rain_total:   "Niederschlagsmenge"
+
+  # Diagnose- / Status-Entitäten
+  name_uptime:       "Betriebszeit"
+  name_wifi_signal:  "WLAN-Signal"
+  name_reset_reason: "Neustartgrund"

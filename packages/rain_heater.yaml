@@ -56,13 +56,15 @@ sensor:
             return x * id(cfg_rain_mm_per_tick).state;
 
   ## --- Rain comb: active RC-discharge sense ---
-  ## The comb sense node sits directly on GPIO13 (D7). R6 (100k) ties that
-  ## node to GPIO15 (D8), which carries the WeMos on-board 12k boot pulldown;
-  ## R6 + 12k ≈ 112k forms the fixed bleed. The 2 s interval at the bottom of
-  ## this file drives D7 HIGH to charge C1 (1 nF), releases to INPUT, and times
-  ## the fall below the logic threshold. MEASURED behaviour is inverted from a
-  ## naive comb-to-GND model: a wet comb props the node up and SLOWS the fall,
-  ## so LONGER discharge = wetter. GPIO15 is left undeclared and unread.
+  ## The comb sense node sits directly on GPIO13 (D7); one comb electrode is on
+  ## that node, the other is hard-grounded. R6 (100k) ties the node to GPIO15
+  ## (D8), which carries the WeMos on-board 12k boot pulldown; R6 + 12k ≈ 112k is
+  ## a fixed bleed leg in parallel with the comb. The 2 s interval at the bottom
+  ## of this file drives D7 HIGH to charge C1 (1 nF), releases to INPUT, and times
+  ## the fall to GND. A wet film RAISES the comb's capacitance (water ε_r ≈ 80),
+  ## which outweighs the conductance it also adds, so the fall SLOWS: LONGER
+  ## discharge = wetter. In normal operation GPIO15 is left undeclared and unread
+  ## (the bench experiment below temporarily drives it for a resistive read).
   ## See docs/hardware-rain-sensor.md for the full circuit analysis.
   - platform: template
     name: "Rain comb discharge time"   # diagnostic / calibration aid
@@ -88,6 +90,26 @@ sensor:
     web_server:
       sorting_group_id: wsg_rain
       sorting_weight: 10
+
+  ## ===================== BENCH EXPERIMENT (temporary) =====================
+  ## Resistive-channel readout, paired with the capacitive rain_comb_us above.
+  ## Part of the dual-read experiment in the 2 s interval at the bottom of this
+  ## file. REVERT when done: `git checkout HEAD -- packages/rain_heater.yaml`
+  ## (removes this sensor, the experiment interval, and restores the cap-only
+  ## sense block). See docs/hardware-rain-sensor.md "compound detection".
+  - platform: template
+    name: "Rain comb resistive time"
+    id: rain_comb_res_us
+    unit_of_measurement: "µs"
+    accuracy_decimals: 0
+    state_class: measurement
+    icon: "mdi:omega"
+    update_interval: never
+    entity_category: diagnostic
+    web_server:
+      sorting_group_id: wsg_rain
+      sorting_weight: 21
+  ## =================== END BENCH EXPERIMENT (temporary) ===================
 
 number:
   - platform: template
@@ -424,50 +446,115 @@ interval:
                 id(rain_heater_pwm).set_level(duty);
                 id(rain_heater_duty).publish_state(duty * 100.0f);
 
-  ## Rain comb sense: charge/discharge timing on GPIO13 (D7). Publishes the raw
-  ## discharge time (us, diagnostic) and the derived wetness % into
-  ## rain_sensor_value (regensensor_wert parity). This is the SOLE writer of
-  ## rain_sensor_value — do not re-add the old passive GPIO15 duty-cycle sampler
-  ## (GPIO15 never goes high through R6+12k, so it only stomps this value to 0
-  ## and breaks the rain_detector delayed_on latch).
+  ## ===================== BENCH EXPERIMENT (temporary) =====================
+  ## Dual-read comb sense: measures the CAPACITIVE and RESISTIVE channels each
+  ## cycle and publishes paired values, to test whether they carry complementary
+  ## information (the stall.biz "evaluates both resistance and capacitance" claim).
+  ##
+  ## This REPLACES the normal cap-only 2 s comb-sense block. It still publishes
+  ## rain_comb_us + rain_sensor_value from the capacitive channel exactly as
+  ## before, so the Rain detector is UNAFFECTED. It additionally drives GPIO15
+  ## for the resistive read (normal operation leaves GPIO15 unread).
+  ## REVERT: `git checkout HEAD -- packages/rain_heater.yaml`.
+  ##
+  ## Read the combined "rain_dual" log line while wetting the comb:
+  ##   cap_us  capacitive (fast-fall, median 7) — responds early to the water
+  ##           dielectric, incl. partial bridging. ~6 us dry.
+  ##   res_us  resistive (rise time under GPIO15 excitation, median 5) — sits at
+  ##           a dry floor, climbs and pins at timeout once a CONDUCTIVE film
+  ##           forms. Absolute value depends on chip Vih + node C; read the trend.
+  ##   bridge  settled level under GPIO15 excitation — the clean resistance bit
+  ##           ("YES" = conductive path pulling the node below threshold).
+  ## If cap_us climbs meaningfully BEFORE bridge flips to YES, the channels are
+  ## complementary (cap leads) and a compound value would beat either alone. If
+  ## they move together, the single capacitive read is sufficient for us.
+  ## NOTE: both excitations drive the comb's signal side positive — this is NOT
+  ## polarity alternation (impossible here: one electrode is hard-grounded).
   - interval: 2s
     then:
       - lambda: |-
-          const uint8_t PIN = 13;            // GPIO13 / D7 — comb sense node
-          const uint32_t TIMEOUT_US = 600;   // generous; max observed wet ~67 us
-          uint32_t s[7];
+          const uint8_t SENSE = 13;          // GPIO13 / D7 — comb sense node
+          const uint8_t EXC   = 15;          // GPIO15 / D8 — far terminal via R6
+          const uint32_t CAP_TIMEOUT = 600;  // us — fall window (max wet ~67 us)
+          const uint32_t RES_TIMEOUT = 2000; // us — rise window (dry tens-hundreds us)
+
+          // ---------- Channel C: capacitive discharge time (median of 7) ----------
+          // Charge node via IO13, release, time the FAST fall to GND. IO15 stays
+          // INPUT so the R6 + 12k bleed leg is in circuit. C-weighted (us scale).
+          uint32_t cs[7];
           for (int i = 0; i < 7; i++) {
-            pinMode(PIN, OUTPUT);
-            digitalWrite(PIN, HIGH);
-            delayMicroseconds(120);          // charge C1 (1 nF) hard to Vcc
+            pinMode(EXC, INPUT);             // restore 12k-pulldown bleed leg
+            pinMode(SENSE, OUTPUT);
+            digitalWrite(SENSE, HIGH);       // charge C1 (1 nF) to Vcc
+            delayMicroseconds(120);
             uint32_t dt;
             {
               InterruptLock lock;            // clean timing over the short window
-              pinMode(PIN, INPUT);           // release; node bleeds toward rail
+              pinMode(SENSE, INPUT);
               uint32_t t0 = micros();
-              while (digitalRead(PIN) && (micros() - t0) < TIMEOUT_US) { }
+              while (digitalRead(SENSE) && (micros() - t0) < CAP_TIMEOUT) { }
               dt = micros() - t0;
             }
-            s[i] = dt;
-            delay(3);                         // let C1 re-settle between samples
+            cs[i] = dt;
+            delay(3);
           }
-          for (int a = 0; a < 7; a++)         // median of 7 -> rejects ISR jitter
+          for (int a = 0; a < 7; a++)
             for (int b = a + 1; b < 7; b++)
-              if (s[b] < s[a]) { uint32_t t = s[a]; s[a] = s[b]; s[b] = t; }
-          uint32_t dt = s[3];
-          id(rain_comb_us).publish_state((float) dt);
+              if (cs[b] < cs[a]) { uint32_t t = cs[a]; cs[a] = cs[b]; cs[b] = t; }
+          uint32_t cap_us = cs[3];
 
-          // Measured transfer function is INVERTED vs a naive comb-to-GND model:
-          // a wet comb props the sense node up and SLOWS the fall below the
-          // logic threshold, so LONGER discharge = wetter.
+          // ---------- Channel R: resistive rise time + settled level (median of 5) ----------
+          // Drain node, drive IO15 HIGH through R6, time the node RISING past
+          // threshold. Settled level = pure resistive divider (C dropped out), so a
+          // conductive film lowers it. Not interrupt-locked (longer window); the
+          // median tames jitter and the settled read is the clean R bit.
+          uint32_t rsa[5];
+          bool res_high = true;
+          for (int i = 0; i < 5; i++) {
+            pinMode(EXC, INPUT);
+            pinMode(SENSE, OUTPUT);
+            digitalWrite(SENSE, LOW);        // drain node to ~0 V
+            delayMicroseconds(300);
+            pinMode(SENSE, INPUT);           // release sense
+            pinMode(EXC, OUTPUT);
+            digitalWrite(EXC, HIGH);         // excite far terminal through R6 100k
+            uint32_t t0 = micros();
+            while (!digitalRead(SENSE) && (micros() - t0) < RES_TIMEOUT) { }
+            rsa[i] = micros() - t0;          // rise time (RES_TIMEOUT if never)
+            delayMicroseconds(1500);         // let the divider fully settle
+            res_high = digitalRead(SENSE);   // settled level: HIGH = no bridge
+            pinMode(EXC, INPUT);             // restore IO15 boot-strap pulldown
+            delay(3);
+          }
+          for (int a = 0; a < 5; a++)
+            for (int b = a + 1; b < 5; b++)
+              if (rsa[b] < rsa[a]) { uint32_t t = rsa[a]; rsa[a] = rsa[b]; rsa[b] = t; }
+          uint32_t res_us = rsa[2];
+
+          // leave both pins released
+          pinMode(SENSE, INPUT);
+          pinMode(EXC, INPUT);
+
+          // ---------- publish paired values ----------
+          id(rain_comb_us).publish_state((float) cap_us);       // capacitive (existing entity)
+          id(rain_comb_res_us).publish_state((float) res_us);   // resistive (experiment entity)
+
+          // keep the detector alive: wetness % from the capacitive channel (unchanged).
+          // A wet film raises comb capacitance (eps_r ~80), which outweighs the
+          // conductance it adds, so the fall SLOWS — LONGER discharge = wetter.
           //   dry comb ~= cfg_comb_dry_us -> 0 %    (this unit: ~6 us)
           //   wet comb ~= cfg_comb_wet_us -> 100 %  (this unit: ~67 us)
-          // Both endpoints are runtime-calibratable numbers.
           float dry_us = id(cfg_comb_dry_us).state;
           float wet_us = id(cfg_comb_wet_us).state;
           if (std::isnan(dry_us)) dry_us = 6.0f;
           if (std::isnan(wet_us) || wet_us <= dry_us) wet_us = dry_us + 1.0f;  // /0 guard
-          float wet = 100.0f * ((float) dt - dry_us) / (wet_us - dry_us);
+          float wet = 100.0f * ((float) cap_us - dry_us) / (wet_us - dry_us);
           if (wet < 0)   wet = 0;
           if (wet > 100) wet = 100;
           id(rain_sensor_value).publish_state(wet);
+
+          // ---------- one combined log line for trivial side-by-side reading ----------
+          ESP_LOGI("rain_dual", "cap=%4u us   res=%4u us   bridge=%s   wet=%3.0f %%",
+                   (unsigned) cap_us, (unsigned) res_us,
+                   res_high ? "no " : "YES", wet);
+  ## =================== END BENCH EXPERIMENT (temporary) ===================

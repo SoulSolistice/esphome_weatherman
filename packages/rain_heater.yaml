@@ -56,13 +56,15 @@ sensor:
             return x * id(cfg_rain_mm_per_tick).state;
 
   ## --- Rain comb: active RC-discharge sense ---
-  ## The comb sense node sits directly on GPIO13 (D7). R6 (100k) ties that
-  ## node to GPIO15 (D8), which carries the WeMos on-board 12k boot pulldown;
-  ## R6 + 12k ≈ 112k forms the fixed bleed. The 2 s interval at the bottom of
-  ## this file drives D7 HIGH to charge C1 (1 nF), releases to INPUT, and times
-  ## the fall below the logic threshold. MEASURED behaviour is inverted from a
-  ## naive comb-to-GND model: a wet comb props the node up and SLOWS the fall,
-  ## so LONGER discharge = wetter. GPIO15 is left undeclared and unread.
+  ## The comb sense node sits directly on GPIO13 (D7); one comb electrode is on
+  ## that node, the other is hard-grounded. R6 (100k) ties the node to GPIO15
+  ## (D8), which carries the WeMos on-board 12k boot pulldown; R6 + 12k ≈ 112k is
+  ## a fixed bleed leg in parallel with the comb. The 2 s interval at the bottom
+  ## of this file drives D7 HIGH to charge the sense node, releases to INPUT, and
+  ## times the fall to GND. A wet film RAISES the comb capacitance (water
+  ## ε_r ≈ 80), which slows the fall, so LONGER discharge = wetter. Bench testing
+  ## (dry → heavy rain) found the comb's conductance never registers — the signal
+  ## is effectively all capacitance. GPIO15 is left undeclared and unread.
   ## See docs/hardware-rain-sensor.md for the full circuit analysis.
   - platform: template
     name: "Rain comb discharge time"   # diagnostic / calibration aid
@@ -263,8 +265,8 @@ number:
 binary_sensor:
   ## wm_regenmelder — rain detector. FAST, BINARY rain signal for protective
   ## automations (retract awning, close roof windows). Intensity is NOT derived
-  ## here: comb conductance saturates once a film bridges the traces, so it
-  ## reports presence, not strength — use the rain bucket (mm/h) for intensity.
+  ## here: the comb's capacitive response saturates once a water film forms, so
+  ## it reports presence, not strength — use the rain bucket (mm/h) for intensity.
   ## rain_sensor_value (%) is only thresholded against cfg_rain_threshold_pct.
   ## This flag also drives the heater's rain-heating term (see control below).
   ##
@@ -443,7 +445,7 @@ interval:
             uint32_t dt;
             {
               InterruptLock lock;            // clean timing over the short window
-              pinMode(PIN, INPUT);           // release; node bleeds toward rail
+              pinMode(PIN, INPUT);           // release; node discharges to GND
               uint32_t t0 = micros();
               while (digitalRead(PIN) && (micros() - t0) < TIMEOUT_US) { }
               dt = micros() - t0;
@@ -457,11 +459,12 @@ interval:
           uint32_t dt = s[3];
           id(rain_comb_us).publish_state((float) dt);
 
-          // Measured transfer function is INVERTED vs a naive comb-to-GND model:
-          // a wet comb props the sense node up and SLOWS the fall below the
-          // logic threshold, so LONGER discharge = wetter.
+          // A wet film RAISES the comb capacitance (water eps_r ~80), which slows
+          // the fall, so LONGER discharge = wetter. Bench testing showed the
+          // conductive contribution never registers — effectively all capacitance
+          // (see docs/hardware-rain-sensor.md).
           //   dry comb ~= cfg_comb_dry_us -> 0 %    (this unit: ~6 us)
-          //   wet comb ~= cfg_comb_wet_us -> 100 %  (this unit: ~67 us)
+          //   wet comb ~= cfg_comb_wet_us -> 100 %  (this unit: ~65-67 us)
           // Both endpoints are runtime-calibratable numbers.
           float dry_us = id(cfg_comb_dry_us).state;
           float wet_us = id(cfg_comb_wet_us).state;

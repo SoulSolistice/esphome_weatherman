@@ -109,39 +109,182 @@ and the measurement tells us which wins:
 
 These pull opposite ways, so the direction is not obvious a priori — but the
 hardware settles it: **wet is slower (~67 µs) than dry (~6 µs)**, so the
-capacitance increase outweighs the conductance increase in the RC product. This
-is consistent with a thin, relatively high-resistance film that is nonetheless
-dielectrically significant across the tightly-spaced fingers (large ΔC, modest
-ΔG). It also matches the stall.biz product description, which states the sensor
-responds to *both* the resistance and the capacitance change when a drop lands on
-the grid (the gold plating being there for corrosion protection of the resistive
-traces).
+capacitance increase wins. A dedicated bench experiment (next subsection)
+sharpened this from "C beats R" into something stronger: the resistive
+contribution is not merely outweighed, it is *below the measurement floor*. Even
+soaking wet, the comb's conductance never pulls the node across a logic threshold
+(see the `bridge` column in the results table). So the operative conclusion is
+that on this hardware the wetness signal is **effectively all capacitance**. This
+fits a thin, high-resistance film that is nonetheless dielectrically large across
+the tightly-spaced fingers (large ΔC, *negligible measurable* ΔG), consistent
+with gold-plated electrodes and relatively non-conductive (clean/soft) water.
 
-This firmware does not measure resistance and capacitance separately (as the
-original firmware apparently did) — the single RC-discharge timing captures their
-combined effect, which is all that's needed for a clean, monotonic wetness signal.
+The stall.biz product page describes the sensor as responding to *both* the
+resistance and the capacitance change (the gold plating being there for corrosion
+protection of the resistive traces). That dual-mode behaviour **does not
+reproduce on this unit** — the experiment below tests for a separate resistive
+signal directly and finds none across the full dry→deluge range. Whatever the
+closed original firmware did with a resistive read, here it would be reading
+noise. This firmware therefore takes the single RC-discharge timing — which
+captures the entire usable signal as a clean, monotonic wetness measure — rather
+than attempting a resistance/capacitance split.
 
-The absolute dry baseline of ~6 µs is *faster* than the ~95 µs
-that the 112 kΩ bleed and a 1 nF cap alone would give. With the comb dry and
-contributing almost no conductance, C1 should discharge slowly through the 112 kΩ
-leg — yet it falls in microseconds. The most likely explanations are that the
-effective discharge resistance dry is far below 112 kΩ (board/input leakage, or
-the comb's residual dry conductance), or that the node capacitance actually in
-play is well under 1 nF. This doesn't affect operation: the transfer function is
-monotonic over a usable ~11× span, repeatable, and parametrised by the runtime
-calibration below. A bench measurement of the node's actual RC dry (e.g. scope
-the fall, or measure C1 and the dry R to GND directly) would close it; it is not
-necessary to operate the sensor.
+The absolute dry baseline of ~6 µs is *faster* than the ~95 µs that the 112 kΩ
+bleed and a full 1 nF cap would give — and the dual-read experiment closes the
+gap. Its dry baseline read **cap = 6 µs** and **res = 2 µs**, and the resistive
+read is the decisive one: it charges the node through R6's *known* 100 kΩ from
+GPIO15, so its 2 µs rise pins the node capacitance independent of the (unknown,
+dry) comb resistance — a full 1 nF charging through 100 kΩ would take ~100 µs, not
+2 µs. Both reads land on an effective node capacitance of **a few tens of pF**
+(~40–60 pF). So the second of the two candidates above is the answer: **the
+capacitance actually in play is well under 1 nF.** Whatever C1's exact role, it is
+not presenting its full 1 nF to the node — the node behaves as ~50 pF, and
+112 kΩ · 50 pF · ln(3.3/1.4) ≈ 5 µs, matching the observed ~6 µs. The baseline is
+therefore explained, not anomalous.
+
+This also sets the scale of the inversion. With the conductance immaterial (so the
+discharge resistance stays ~112 kΩ wet as well as dry), reaching the wet ~67 µs
+requires the node capacitance to climb to ~700 pF — i.e. a water film adds on the
+order of **~0.6 nF**. A large ΔC and an essentially unchanged R: precisely the
+capacitance-dominated picture, now quantified rather than inferred.
 
 This also matches the original's quoted responsiveness: the product page cites a
 1–5 s rain reaction time, consistent with our ~5–7 s detection target (see the
 detection philosophy section).
 
+### Dual-read experiment: is there a separate resistive signal?
+
+The stall.biz page claims the sensor evaluates *both* resistance and capacitance,
+and the topology looked like it might provision for it: R6 returns node N to a
+*controllable* GPIO (D8) rather than straight to GND, which is exactly what a
+second driven electrode would need. To test whether a resistive read carries
+information the capacitive read does not, the shipping single read was temporarily
+replaced with a dual-read diagnostic.
+
+One hypothesis is worth ruling out up front: the two pins are **not** used for
+polarity alternation (driving the comb +/− on alternate cycles to average out
+electrolytic corrosion). They *cannot* be — one comb electrode is hard-grounded,
+so the comb's polarity cannot be reversed. Both excitations below drive the
+signal side positive. The only thing a second pin can buy here is reading the node
+in a *different regime*. Corrosion protection on this comb is the gold plating
+alone.
+
+The two regimes:
+
+- **Capacitive (C-weighted)** — the normal read. Charge N from D7, release, time
+  the fast fall to GND. On the microsecond timescale the node capacitance sets the
+  fall, so this tracks ΔC.
+- **Resistive (R-weighted)** — drive D8 HIGH through R6 and watch N rise. Once the
+  node settles, its level is the pure resistive divider
+  `3.3 V · R_comb/(R_comb + 100 kΩ)` — capacitance has dropped out — so a
+  conductive film *lowers* it. Two things are logged: a continuous rise-time, and
+  a settled digital level `bridge`, read after the node is given time to settle.
+  `bridge` is the clean resistance bit: `no` = node still high (no conductive
+  path), `YES` = a film is pulling it below threshold. With only digital I/O, that
+  settled level is the one genuinely capacitance-free resistance measurement
+  available.
+
+The diagnostic lambda (it replaced the 2 s sense interval and was reverted
+afterwards; the C channel kept driving `rain_comb_us` + `rain_sensor_value`, so
+the detector stayed live during the run):
+
+```cpp
+const uint8_t SENSE = 13;          // D7 — comb sense node
+const uint8_t EXC   = 15;          // D8 — far terminal via R6 100k
+const uint32_t CAP_TIMEOUT = 600;  // us, fall window
+const uint32_t RES_TIMEOUT = 2000; // us, rise window
+
+// Channel C: capacitive discharge time (median of 7)
+uint32_t cs[7];
+for (int i = 0; i < 7; i++) {
+  pinMode(EXC, INPUT);             // restore the R6 + 12k bleed leg
+  pinMode(SENSE, OUTPUT);
+  digitalWrite(SENSE, HIGH);       // charge the node
+  delayMicroseconds(120);
+  uint32_t dt;
+  { InterruptLock lock;            // lock only the short timing window
+    pinMode(SENSE, INPUT);
+    uint32_t t0 = micros();
+    while (digitalRead(SENSE) && (micros() - t0) < CAP_TIMEOUT) { }
+    dt = micros() - t0; }
+  cs[i] = dt;
+  delay(3);
+}
+// ... insertion-sort cs[], cap_us = cs[3];
+
+// Channel R: resistive rise-time + settled level (median of 5)
+uint32_t rsa[5];
+bool res_high = true;
+for (int i = 0; i < 5; i++) {
+  pinMode(EXC, INPUT);
+  pinMode(SENSE, OUTPUT);
+  digitalWrite(SENSE, LOW);        // drain node to ~0 V
+  delayMicroseconds(300);
+  pinMode(SENSE, INPUT);           // release sense
+  pinMode(EXC, OUTPUT);
+  digitalWrite(EXC, HIGH);         // excite far electrode through R6
+  uint32_t t0 = micros();
+  while (!digitalRead(SENSE) && (micros() - t0) < RES_TIMEOUT) { }
+  rsa[i] = micros() - t0;          // rise time (RES_TIMEOUT if it never crosses)
+  delayMicroseconds(1500);         // let the divider settle
+  res_high = digitalRead(SENSE);   // settled level: HIGH = no conductive bridge
+  pinMode(EXC, INPUT);             // restore D8 boot-strap pulldown
+  delay(3);
+}
+// ... insertion-sort rsa[], res_us = rsa[2];
+
+ESP_LOGI("rain_dual", "cap=%4u us  res=%4u us  bridge=%s",
+         (unsigned) cap_us, (unsigned) res_us, res_high ? "no" : "YES");
+```
+
+The resistive rise loop is deliberately *not* inside an `InterruptLock` — a ~2 ms
+window is too long to hold interrupts off — so its rise-time jitters with 433 MHz
+TFA reception (the median tames it); the settled `bridge` read is unaffected and
+is the value to trust. Note the resistive read leaves a brief DC excitation on the
+comb each cycle; benign for a bench run, and another reason it is not in the
+shipping firmware.
+
+Wetting the comb from dry through a real heavy-rain event:
+
+| comb state                   | cap (µs) | res (µs) | bridge |
+|------------------------------|----------|----------|--------|
+| bone dry                     | 6        | 1–2      | no     |
+| dry, jitter ceiling          | 10       | 2        | no     |
+| light mist                   | 14–51    | 21–47    | no     |
+| splashing                    | ~63      | ~54      | no     |
+| real heavy rain (saturated)  | 65       | 57–58    | no     |
+
+Three findings, and they overturn the dual-mode hypothesis for this hardware:
+
+1. **`bridge` never fired — not once, not even in saturated heavy rain.** The
+   resistive divider never pulled the node below threshold, so the comb's
+   conductance, even soaking wet, stays too low (resistance too high) to register
+   on a digital read. The clean resistive channel carries **no usable signal
+   across the entire dry→deluge range.**
+2. **`res` and `cap` are the same signal.** The resistive *rise-time* is itself an
+   RC measurement and shares the node capacitance, so it tracks `cap` (both climb
+   with wetness) rather than measuring anything independent. There are not two
+   channels here — there is one capacitance signal read two ways, plus a
+   resistance bit that never trips.
+3. **So a compound value buys nothing here.** Whatever the closed original
+   firmware did with a resistive read, on this comb it would be reading noise; the
+   single capacitive read captures the whole usable signal. The most likely reason
+   the conductance is immaterial is the combination of gold-plated electrodes and
+   relatively non-conductive (clean/soft) water — a wet-but-high-resistance film
+   that is dielectrically large but barely conductive.
+
+The experiment was reverted and the shipping firmware keeps the single capacitive
+read. This subsection preserves the method and code so the question need not be
+re-opened from scratch: a future build with a *different* comb (unplated, or a
+more conductive environment) can drop the same diagnostic back in to re-check
+whether a resistive channel has become worthwhile.
+
 ### Why GPIO13 and not GPIO15 for sensing
 
 Because the comb has to *dominate* the discharge. On GPIO13 the alternate path
-to ground is the high-impedance 112 kΩ bleed, so the comb's conductance is what
-moves the timing. If you instead charged and sensed on GPIO15, the 12 kΩ
+to ground is the high-impedance 112 kΩ bleed, so the comb — chiefly its
+capacitance — is what moves the timing. If you instead charged and sensed on
+GPIO15, the 12 kΩ
 pulldown would dominate and the comb (sitting behind R6's 100 kΩ) would shift
 the discharge by only a few percent — swamped. The designer put the comb on the
 clean high-impedance pin and the fixed reference behind R6 on the strapped pin
@@ -207,8 +350,9 @@ different physical quantities:
 - **Rain bucket (`wm_regenstaerke`, mm/h).** Integrates *volume over time* by
   counting tips. Quantitative, and necessarily slow — it needs ~0.5 mm of
   accumulation to tip. This is the **intensity** source.
-- **Rain comb (`wm_regensensor_wert` → `wm_regenmelder`).** Measures surface
-  *conductance* — is there a water film bridging the traces. Fast, but it
+- **Rain comb (`wm_regensensor_wert` → `wm_regenmelder`).** Measures the surface
+  *capacitance* — whether a water film is dielectrically loading the comb (the
+  conductance turns out to be immaterial; see the experiment above). Fast, but it
   **saturates** as soon as a film forms: a drizzle that wets the surface and a
   downpour read nearly the same. This is a **presence** signal, not an intensity
   one.
@@ -295,6 +439,6 @@ duty each cycle, so there is no stale-latch risk.
 - There is deliberately no maximum heat-on cap: rain heating lasts the entire
   detected-wet period. A comb that reads wet forever (a corrosion or leakage fault
   in the sensor or its connector) would therefore hold the heater on
-  indefinitely. At ~6 W this is accepted rather than guarded — but if a stuck-wet
+  indefinitely. At ~0.7 W this is accepted rather than guarded — but if a stuck-wet
   fault is a concern for a given install, a timed script gating the rain-heating
   term is the clean place to add a cap.

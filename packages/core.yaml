@@ -98,22 +98,22 @@ web_server:
   local: true                     # only reachable via mDNS / LAN; no internet exposure
   sorting_groups:
     - id: wsg_weather
-      name: "Weather"
+      name: "${name_grp_weather}"
       sorting_weight: 10
     - id: wsg_comfort
-      name: "Thermal comfort"
+      name: "${name_grp_comfort}"
       sorting_weight: 20
     - id: wsg_wind
-      name: "Wind detail"
+      name: "${name_grp_wind}"
       sorting_weight: 30
     - id: wsg_pressure
-      name: "Pressure detail"
+      name: "${name_grp_pressure}"
       sorting_weight: 40
     - id: wsg_rain
-      name: "Rain detail"
+      name: "${name_grp_rain}"
       sorting_weight: 50
     - id: wsg_heater
-      name: "Heater"
+      name: "${name_grp_heater}"
       sorting_weight: 60
 time:
   - platform: sntp
@@ -162,12 +162,12 @@ globals:
 sensor:
   ## --- Diagnostics ---
   - platform: wifi_signal
-    name: "WiFi RSSI"
+    name: "${name_wifi_rssi}"
     entity_category: diagnostic
     update_interval: 60s
 
   - platform: uptime
-    name: "Uptime"
+    name: "${name_uptime}"
     entity_category: diagnostic
 
   ## --- WiFi-reboot indicator (see the wifi: block and globals above) ---
@@ -176,7 +176,7 @@ sensor:
   ## a rising Boot count + recent disconnects + short Uptime ⟹ WiFi-driven
   ## reboot (which reset_reason reports only as a generic software restart).
   - platform: template
-    name: "Boot count"
+    name: "${name_boot_count}"
     id: boot_count_sensor
     entity_category: diagnostic
     accuracy_decimals: 0
@@ -186,7 +186,7 @@ sensor:
     lambda: 'return id(boot_count);'
 
   - platform: template
-    name: "WiFi disconnects"
+    name: "${name_wifi_disconnects}"
     id: wifi_disconnects_sensor
     entity_category: diagnostic
     accuracy_decimals: 0
@@ -207,29 +207,29 @@ sensor:
   ## diagnostic with bytes/%/ms units and a 60s interval — names only.)
   - platform: debug
     free:
-      name: "Heap free"
+      name: "${name_heap_free}"
     block:
-      name: "Heap max block"
+      name: "${name_heap_block}"
     fragmentation:
-      name: "Heap fragmentation"
+      name: "${name_heap_frag}"
     loop_time:
-      name: "Loop time"
+      name: "${name_loop_time}"
 
 binary_sensor:
   - platform: status
-    name: "Online"
+    name: "${name_online}"
     entity_category: diagnostic
 
 text_sensor:
   ## wm_ip
   - platform: wifi_info
     ip_address:
-      name: "IP address"
+      name: "${name_ip}"
       entity_category: diagnostic
 
   ## Build info
   - platform: version
-    name: "ESPHome version"
+    name: "${name_esphome_version}"
     entity_category: diagnostic
 
   ## Reason for the most recent reset. Hardware faults read clearly
@@ -240,5 +240,5 @@ text_sensor:
   ## Uptime and the "Online" status sensor to spot WiFi-driven reboots.
   - platform: debug
     reset_reason:
-      name: "Reset reason"
+      name: "${name_reset_reason}"
       entity_category: diagnostic

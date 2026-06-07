@@ -43,7 +43,7 @@ sensor:
   - platform: tfa_tx141w
     tfa_tx141w_id: tfa_wind
     temperature:
-      name: "Wind head temperature"
+      name: "${name_wind_head_temp}"
       id: wind_head_temp
       entity_category: diagnostic
       filters:
@@ -55,7 +55,7 @@ sensor:
       ## demoted to diagnostic to avoid cluttering the main weather group
       ## with a redundant reading.
     humidity:
-      name: "Outdoor humidity"
+      name: "${name_outdoor_humidity}"
       id: outdoor_hum
       web_server:
         sorting_group_id: wsg_weather
@@ -63,7 +63,7 @@ sensor:
       filters:
         - filter_out: nan
     wind_speed:
-      name: "Wind speed"
+      name: "${name_wind_speed}"
       id: wind_speed_kmh
       unit_of_measurement: "km/h"
       device_class: wind_speed
@@ -91,30 +91,30 @@ sensor:
     ## HA graphs. UNCOMMENT only if you've upgraded to the Anemometer
     ## variant (TFA 35.1140.01, w_station_type:3).
     # wind_direction:
-    #   name: "Wind direction"
+    #   name: "${name_wind_dir}"
     #   id: wind_dir_deg
     #   web_server:
     #     sorting_group_id: wsg_wind
     #     sorting_weight: 30
     battery_level:
-      name: "TFA battery"
+      name: "${name_tfa_battery}"
       entity_category: diagnostic
     sensor_id:
-      name: "TFA sensor ID"
+      name: "${name_tfa_sensor_id}"
       entity_category: diagnostic
     packets_valid:
-      name: "TFA packets valid"
+      name: "${name_tfa_packets_valid}"
       entity_category: diagnostic
     packets_invalid:
-      name: "TFA packets invalid"
+      name: "${name_tfa_packets_invalid}"
       entity_category: diagnostic
     sync_detections:
-      name: "TFA sync detections"
+      name: "${name_tfa_sync}"
       entity_category: diagnostic
 
   ## --- Wind gust (peak in last N minutes) ---
   - platform: template
-    name: "Wind gust"               # wm_wind_spitze in km/h
+    name: "${name_wind_gust}"               # wm_wind_spitze in km/h
     unit_of_measurement: "km/h"
     device_class: wind_speed
     accuracy_decimals: 1
@@ -127,7 +127,7 @@ sensor:
     lambda: 'return id(wind_gust_max_kmh);'
 
   - platform: template
-    name: "Wind gust (mps)"
+    name: "${name_wind_gust_mps}"
     unit_of_measurement: "m/s"
     device_class: wind_speed
     accuracy_decimals: 1
@@ -140,7 +140,7 @@ sensor:
 
   ## --- Wind speed in m/s (wm_wind_mittel native unit) ---
   - platform: template
-    name: "Wind speed (mps)"        # wm_wind_mittel
+    name: "${name_wind_speed_mps}"        # wm_wind_mittel
     unit_of_measurement: "m/s"
     device_class: wind_speed
     accuracy_decimals: 1
@@ -161,7 +161,7 @@ number:
   ## reconfigured at runtime), so the effective reset lands within ~30s of the
   ## window expiring — negligible for typical 5–15 min windows.
   - platform: template
-    name: "Wind gust window"
+    name: "${name_gust_window}"
     id: cfg_gust_window_min
     icon: "mdi:weather-windy"
     min_value: 1
@@ -189,7 +189,7 @@ text_sensor:
   - platform: tfa_tx141w
     tfa_tx141w_id: tfa_wind
     last_status:
-      name: "TFA decoder status"
+      name: "${name_tfa_status}"
       entity_category: diagnostic
 
 interval:

@@ -13,7 +13,7 @@ sensor:
 
   ## wm_taupunkt - dewpoint via Magnus-Tetens
   - platform: template
-    name: "Dewpoint"
+    name: "${name_dewpoint}"
     id: dewpoint_c
     unit_of_measurement: "°C"
     device_class: temperature
@@ -33,7 +33,7 @@ sensor:
 
   ## wm_feuchte_abs - absolute humidity g/m³
   - platform: template
-    name: "Absolute humidity"
+    name: "${name_abs_humidity}"
     unit_of_measurement: "g/m³"
     state_class: measurement
     accuracy_decimals: 1
@@ -49,7 +49,7 @@ sensor:
 
   ## wm_windchill - NOAA wind chill, valid for T<=10°C and v>=4.8 km/h
   - platform: template
-    name: "Wind chill"
+    name: "${name_wind_chill}"
     unit_of_measurement: "°C"
     device_class: temperature
     state_class: measurement
@@ -68,7 +68,7 @@ sensor:
 
   ## Apparent Temperature (BoM / Steadman 1994)
   - platform: template
-    name: "Apparent temperature"
+    name: "${name_apparent_temp}"
     unit_of_measurement: "°C"
     device_class: temperature
     state_class: measurement
@@ -89,7 +89,7 @@ sensor:
 
   ## Heat Index (NOAA Rothfusz regression)
   - platform: template
-    name: "Heat index"
+    name: "${name_heat_index}"
     unit_of_measurement: "°C"
     device_class: temperature
     state_class: measurement
@@ -125,7 +125,7 @@ sensor:
 
   ## Wet Bulb Temperature (Stull 2011 - Analytical approximation)
   - platform: template
-    name: "Wet bulb temperature"
+    name: "${name_wet_bulb}"
     unit_of_measurement: "°C"
     device_class: temperature
     state_class: measurement
@@ -146,7 +146,7 @@ sensor:
 
   ## wm_windstaerke - Beaufort from wind speed
   - platform: template
-    name: "Beaufort"
+    name: "${name_beaufort}"
     state_class: measurement
     accuracy_decimals: 0
     icon: "mdi:weather-windy"
@@ -163,7 +163,7 @@ sensor:
   ## wm_barometer - sea-level corrected pressure
   ## Altitude now sourced from the runtime cfg_altitude_m number.
   - platform: template
-    name: "Barometric pressure (sea level)"
+    name: "${name_pressure_sea}"
     id: pressure_sealevel_hpa
     unit_of_measurement: "hPa"
     device_class: atmospheric_pressure
@@ -182,7 +182,7 @@ sensor:
 
   ## Pressure 3-hour change (numeric, for plotting and HA derivative logic)
   - platform: template
-    name: "Pressure change (3h)"
+    name: "${name_pressure_change_3h}"
     id: pressure_change_3h
     unit_of_measurement: "hPa"
     state_class: measurement
@@ -203,7 +203,7 @@ text_sensor:
   ## COMMENTED OUT alongside the wind_direction sensor above. Uncomment
   ## both blocks together if you have the Anemometer variant.
   # - platform: template
-  #   name: "Wind direction (cardinal)"
+  #   name: "${name_wind_dir_cardinal}"
   #   icon: "mdi:compass"
   #   update_interval: 60s
   #   web_server:
@@ -224,7 +224,7 @@ text_sensor:
   ##   |Δp| > 0.1  hPa/3h: slow change (minor adjustment)
   ##   otherwise: stable
   - platform: template
-    name: "Barometric trend"
+    name: "${name_baro_trend}"
     id: baro_trend
     icon: "mdi:gauge"
     update_interval: 60s

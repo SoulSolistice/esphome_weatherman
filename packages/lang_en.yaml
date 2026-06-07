@@ -1,29 +1,94 @@
 # packages/lang_en.yaml
 #
-# Display NAMES for Weatherman entities (English).
+# Display NAMES for Weatherman entities (English). GENERATED — edit the values
+# here, but keep this file and lang_de.yaml key-for-key identical (CI checks).
 #
 # Scope: Home Assistant does NOT localize ESPHome entity names — it shows the
-# string provided here verbatim (prefixed with the device's friendly_name).
-# Anything you want translated must therefore live in these packs.
-#
-# Deliberately NOT here (Home Assistant localizes these per viewer):
-#   - units of measurement      -> set via device_class + unit_of_measurement
-#   - enum / binary STATE values -> e.g. a moisture binary_sensor's Wet/Dry
-#   - weather conditions         -> localized by HA on its own
-#
-# Keep this file and lang_de.yaml key-for-key identical; the build picks one.
+# string here verbatim. These English values mirror the in-firmware defaults,
+# so an English build renders exactly as before. Deliberately NOT here (HA
+# localizes per viewer): units (device_class + unit_of_measurement), enum /
+# binary STATE values (e.g. a moisture binary_sensor's Wet/Dry), and weather
+# conditions. Keys are grouped by the package file that consumes them.
 
 substitutions:
-  name_temperature:  "Temperature"
-  name_humidity:     "Humidity"
-  name_pressure:     "Pressure"
-  name_wind_speed:   "Wind Speed"
-  name_wind_gust:    "Wind Gust"
-  name_wind_dir:     "Wind Direction"
-  name_rain_rate:    "Rain Rate"
-  name_rain_total:   "Rainfall Total"
+  # --- core.yaml — web UI groups ---
+  name_grp_weather:         "Weather"
+  name_grp_comfort:         "Thermal comfort"
+  name_grp_wind:            "Wind detail"
+  name_grp_pressure:        "Pressure detail"
+  name_grp_rain:            "Rain detail"
+  name_grp_heater:          "Heater"
 
-  # diagnostic / status entities (names also not localized by HA)
-  name_uptime:       "Uptime"
-  name_wifi_signal:  "Wi-Fi Signal"
-  name_reset_reason: "Reset Reason"
+  # --- core.yaml — diagnostics & status ---
+  name_wifi_rssi:           "WiFi RSSI"
+  name_uptime:              "Uptime"
+  name_boot_count:          "Boot count"
+  name_wifi_disconnects:    "WiFi disconnects"
+  name_heap_free:           "Heap free"
+  name_heap_block:          "Heap max block"
+  name_heap_frag:           "Heap fragmentation"
+  name_loop_time:           "Loop time"
+  name_online:              "Online"
+  name_ip:                  "IP address"
+  name_esphome_version:     "ESPHome version"
+  name_reset_reason:        "Reset reason"
+
+  # --- sensors_tfa.yaml — TFA wind head ---
+  name_wind_head_temp:      "Wind head temperature"
+  name_outdoor_humidity:    "Outdoor humidity"
+  name_wind_speed:          "Wind speed"
+  name_wind_dir:            "Wind direction"
+  name_tfa_battery:         "TFA battery"
+  name_tfa_sensor_id:       "TFA sensor ID"
+  name_tfa_packets_valid:   "TFA packets valid"
+  name_tfa_packets_invalid: "TFA packets invalid"
+  name_tfa_sync:            "TFA sync detections"
+  name_wind_gust:           "Wind gust"
+  name_wind_gust_mps:       "Wind gust (mps)"
+  name_wind_speed_mps:      "Wind speed (mps)"
+  name_gust_window:         "Wind gust window"
+  name_tfa_status:          "TFA decoder status"
+
+  # --- sensors_env.yaml — environment ---
+  name_outdoor_temp_ds:     "Outdoor temperature (DS18B20)"
+  name_outdoor_temp:        "Outdoor temperature"
+  name_box_temp:            "Controller box temperature"
+  name_pressure_abs:        "Barometric pressure (absolute)"
+  name_illuminance:         "Illuminance"
+  name_altitude:            "Altitude"
+  name_sun_lux:             "Sun lux threshold"
+  name_sun_shining:         "Sun is shining"
+
+  # --- derived.yaml — computed values ---
+  name_dewpoint:            "Dewpoint"
+  name_abs_humidity:        "Absolute humidity"
+  name_wind_chill:          "Wind chill"
+  name_apparent_temp:       "Apparent temperature"
+  name_heat_index:          "Heat index"
+  name_wet_bulb:            "Wet bulb temperature"
+  name_beaufort:            "Beaufort"
+  name_pressure_sea:        "Barometric pressure (sea level)"
+  name_pressure_change_3h:  "Pressure change (3h)"
+  name_wind_dir_cardinal:   "Wind direction (cardinal)"
+  name_baro_trend:          "Barometric trend"
+
+  # --- rain_heater.yaml — rain & heater ---
+  name_rain_rate:           "Rain rate"
+  name_rain_total:          "Rain total"
+  name_comb_discharge:      "Rain comb discharge time"
+  name_rain_value:          "Rain sensor value"
+  name_bucket_cal:          "Rain bucket calibration"
+  name_rain_threshold:      "Rain detector threshold"
+  name_comb_dry:            "Rain comb dry baseline"
+  name_comb_wet:            "Rain comb wet saturation"
+  name_dew_margin:          "Heater dewpoint margin"
+  name_frost_temp:          "Heater frost-protect temperature"
+  name_frost_band:          "Heater frost-protect band"
+  name_rain_heat_duty:      "Rain heating duty"
+  name_heater_duty:         "Rain heater duty"
+  name_rain_detector:       "Rain detector"
+  name_heater_auto:         "Rain heater auto mode"
+
+  # --- sensor_sht21.yaml — optional SHT21 ---
+  name_sht21_temp:          "SHT21 temperature"
+  name_sht21_humidity:      "SHT21 humidity"

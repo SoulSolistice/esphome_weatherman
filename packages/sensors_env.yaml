@@ -22,7 +22,7 @@ one_wire:
 sensor:
   ## --- DS18B20 (shaded outdoor probe - canonical outdoor temperature) ---
   - platform: dallas_temp
-    name: "Outdoor temperature (DS18B20)"
+    name: "${name_outdoor_temp_ds}"
     id: outdoor_temp_ds18b20
     # address: ${ds18b20_address}  # uncomment after first-boot log inspection
     resolution: 12
@@ -37,7 +37,7 @@ sensor:
   ## NTC if the DS18B20 is missing or returns NaN. All derived sensors
   ## reference this one.
   - platform: template
-    name: "Outdoor temperature"
+    name: "${name_outdoor_temp}"
     id: outdoor_temp
     unit_of_measurement: "°C"
     device_class: temperature
@@ -66,11 +66,11 @@ sensor:
   - platform: bmp280_i2c
     address: 0x76
     temperature:
-      name: "Controller box temperature"
+      name: "${name_box_temp}"
       id: box_temp
       entity_category: diagnostic
     pressure:
-      name: "Barometric pressure (absolute)"
+      name: "${name_pressure_abs}"
       id: pressure_hpa
       web_server:
         sorting_group_id: wsg_pressure
@@ -84,7 +84,7 @@ sensor:
   ## need to extend low-light sensitivity, switch to a different sensor
   ## (e.g. VEML7700) rather than trying to override MTREG.
   - platform: bh1750
-    name: "Illuminance"             # wm_lux
+    name: "${name_illuminance}"             # wm_lux
     id: illuminance_lx
     address: 0x23
     update_interval: 10s
@@ -94,7 +94,7 @@ sensor:
 
 number:
   - platform: template
-    name: "Altitude"
+    name: "${name_altitude}"
     id: cfg_altitude_m
     icon: "mdi:image-filter-hdr"
     min_value: 0
@@ -108,7 +108,7 @@ number:
     entity_category: config
 
   - platform: template
-    name: "Sun lux threshold"
+    name: "${name_sun_lux}"
     id: cfg_sun_lux_threshold
     icon: "mdi:weather-sunny"
     min_value: 100
@@ -124,7 +124,7 @@ number:
 binary_sensor:
   ## wm_sonne_scheint - sun above lux threshold (runtime tunable)
   - platform: template
-    name: "Sun is shining"
+    name: "${name_sun_shining}"
     device_class: light
     web_server:
       sorting_group_id: wsg_weather

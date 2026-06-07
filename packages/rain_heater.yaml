@@ -24,7 +24,7 @@ sensor:
       mode:
         input: true
         pullup: true
-    name: "Rain rate"               # wm_regenstaerke
+    name: "${name_rain_rate}"               # wm_regenstaerke
     unit_of_measurement: "mm/h"
     accuracy_decimals: 2
     state_class: measurement
@@ -43,7 +43,7 @@ sensor:
           return x * id(cfg_rain_mm_per_tick).state * 60.0f;
     total:
       id: rain_total_mm
-      name: "Rain total"
+      name: "${name_rain_total}"
       unit_of_measurement: "mm"
       accuracy_decimals: 2
       state_class: total_increasing
@@ -67,7 +67,7 @@ sensor:
   ## is effectively all capacitance. GPIO15 is left undeclared and unread.
   ## See docs/hardware-rain-sensor.md for the full circuit analysis.
   - platform: template
-    name: "Rain comb discharge time"   # diagnostic / calibration aid
+    name: "${name_comb_discharge}"   # diagnostic / calibration aid
     id: rain_comb_us
     unit_of_measurement: "µs"
     accuracy_decimals: 1
@@ -80,7 +80,7 @@ sensor:
       sorting_weight: 20
 
   - platform: template
-    name: "Rain sensor value"          # wm_regensensor_wert
+    name: "${name_rain_value}"          # wm_regensensor_wert
     id: rain_sensor_value
     unit_of_measurement: "%"
     accuracy_decimals: 0
@@ -93,7 +93,7 @@ sensor:
 
 number:
   - platform: template
-    name: "Rain bucket calibration"
+    name: "${name_bucket_cal}"
     id: cfg_rain_mm_per_tick
     icon: "mdi:cup-water"
     min_value: 0.1
@@ -107,7 +107,7 @@ number:
     entity_category: config
 
   - platform: template
-    name: "Rain detector threshold"
+    name: "${name_rain_threshold}"
     id: cfg_rain_threshold_pct
     icon: "mdi:water-percent-alert"
     min_value: 1
@@ -128,7 +128,7 @@ number:
   ## discharge time" (heater OFF), and cfg_comb_wet_us from a soaked reading.
   ## The mapping clamps to 0-100 %, and is divide-by-zero guarded if wet <= dry.
   - platform: template
-    name: "Rain comb dry baseline"
+    name: "${name_comb_dry}"
     id: cfg_comb_dry_us
     icon: "mdi:water-off"
     min_value: 1
@@ -142,7 +142,7 @@ number:
     entity_category: config
 
   - platform: template
-    name: "Rain comb wet saturation"
+    name: "${name_comb_wet}"
     id: cfg_comb_wet_us
     icon: "mdi:water"
     min_value: 10
@@ -156,7 +156,7 @@ number:
     entity_category: config
 
   - platform: template
-    name: "Heater dewpoint margin"
+    name: "${name_dew_margin}"
     id: cfg_dew_threshold_c
     icon: "mdi:water-thermometer"
     min_value: 0.5
@@ -170,7 +170,7 @@ number:
     entity_category: config
 
   - platform: template
-    name: "Heater frost-protect temperature"
+    name: "${name_frost_temp}"
     id: cfg_frost_protect_c
     icon: "mdi:snowflake-thermometer"
     min_value: -10.0
@@ -189,7 +189,7 @@ number:
   ## hardcoded 2 °C in the control lambda. If left NaN/0 the lambda falls back to
   ## a hard cutoff at the frost temperature (still fail-safe, just no ramp).
   - platform: template
-    name: "Heater frost-protect band"
+    name: "${name_frost_band}"
     id: cfg_frost_band_c
     icon: "mdi:snowflake-melt"
     min_value: 0.5
@@ -220,7 +220,7 @@ number:
   ## on indefinitely. If you want a runaway guard, the clean spot is a timed
   ## script gating this term; ask and it's a few lines.
   - platform: template
-    name: "Rain heating duty"
+    name: "${name_rain_heat_duty}"
     id: cfg_rain_heat_pct
     icon: "mdi:hair-dryer"
     min_value: 0
@@ -239,7 +239,7 @@ number:
   ## slider while auto is on has no effect (the next auto cycle overwrites).
   ## Turn auto OFF first if you want manual control.
   - platform: template
-    name: "Rain heater duty"
+    name: "${name_heater_duty}"
     id: rain_heater_duty
     icon: "mdi:radiator"
     min_value: 0
@@ -285,7 +285,7 @@ binary_sensor:
   ##                      re-extending into a still-wet world — keep it generous
   ##                      (raise to 3-5 min in showery climates).
   - platform: template
-    name: "Rain detector"
+    name: "${name_rain_detector}"
     id: rain_detector
     device_class: moisture
     icon: "mdi:weather-rainy"
@@ -344,7 +344,7 @@ output:
 
 switch:
   - platform: template
-    name: "Rain heater auto mode"
+    name: "${name_heater_auto}"
     id: rain_heater_auto
     icon: "mdi:auto-mode"
     optimistic: true

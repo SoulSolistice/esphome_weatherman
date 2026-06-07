@@ -1,22 +1,89 @@
 # packages/lang_de.yaml
 #
-# Display NAMES for Weatherman entities (German / Deutsch).
-# See lang_en.yaml for the scope note — names only; units, enum/binary state
-# values and weather conditions are left to Home Assistant's own localization.
-#
-# Keep this file key-for-key identical to lang_en.yaml; the build picks one.
+# Display NAMES for Weatherman entities (German / Deutsch). GENERATED.
+# See lang_en.yaml for the scope note. Keep key-for-key identical to it.
+# Meteorological terms are idiomatic German; tweak freely — they are centralized
+# here and consumed everywhere as ${name_*}.
 
 substitutions:
-  name_temperature:  "Temperatur"
-  name_humidity:     "Luftfeuchtigkeit"
-  name_pressure:     "Luftdruck"
-  name_wind_speed:   "Windgeschwindigkeit"
-  name_wind_gust:    "Windböe"
-  name_wind_dir:     "Windrichtung"
-  name_rain_rate:    "Regenrate"
-  name_rain_total:   "Niederschlagsmenge"
+  # --- core.yaml — web UI groups ---
+  name_grp_weather:         "Wetter"
+  name_grp_comfort:         "Thermischer Komfort"
+  name_grp_wind:            "Wind-Details"
+  name_grp_pressure:        "Luftdruck-Details"
+  name_grp_rain:            "Regen-Details"
+  name_grp_heater:          "Heizung"
 
-  # Diagnose- / Status-Entitäten
-  name_uptime:       "Betriebszeit"
-  name_wifi_signal:  "WLAN-Signal"
-  name_reset_reason: "Neustartgrund"
+  # --- core.yaml — diagnostics & status ---
+  name_wifi_rssi:           "WLAN-Signalstärke"
+  name_uptime:              "Betriebszeit"
+  name_boot_count:          "Boot-Zähler"
+  name_wifi_disconnects:    "WLAN-Trennungen"
+  name_heap_free:           "Heap frei"
+  name_heap_block:          "Heap größter Block"
+  name_heap_frag:           "Heap-Fragmentierung"
+  name_loop_time:           "Schleifenzeit"
+  name_online:              "Online"
+  name_ip:                  "IP-Adresse"
+  name_esphome_version:     "ESPHome-Version"
+  name_reset_reason:        "Neustartgrund"
+
+  # --- sensors_tfa.yaml — TFA wind head ---
+  name_wind_head_temp:      "Windmesser-Temperatur"
+  name_outdoor_humidity:    "Außenluftfeuchtigkeit"
+  name_wind_speed:          "Windgeschwindigkeit"
+  name_wind_dir:            "Windrichtung"
+  name_tfa_battery:         "TFA-Batterie"
+  name_tfa_sensor_id:       "TFA-Sensor-ID"
+  name_tfa_packets_valid:   "TFA-Pakete gültig"
+  name_tfa_packets_invalid: "TFA-Pakete ungültig"
+  name_tfa_sync:            "TFA-Sync-Erkennungen"
+  name_wind_gust:           "Windböe"
+  name_wind_gust_mps:       "Windböe (mps)"
+  name_wind_speed_mps:      "Windgeschwindigkeit (mps)"
+  name_gust_window:         "Böenfenster"
+  name_tfa_status:          "TFA-Dekoder-Status"
+
+  # --- sensors_env.yaml — environment ---
+  name_outdoor_temp_ds:     "Außentemperatur (DS18B20)"
+  name_outdoor_temp:        "Außentemperatur"
+  name_box_temp:            "Gehäusetemperatur"
+  name_pressure_abs:        "Luftdruck (absolut)"
+  name_illuminance:         "Beleuchtungsstärke"
+  name_altitude:            "Höhe"
+  name_sun_lux:             "Sonnen-Lux-Schwelle"
+  name_sun_shining:         "Sonne scheint"
+
+  # --- derived.yaml — computed values ---
+  name_dewpoint:            "Taupunkt"
+  name_abs_humidity:        "Absolute Luftfeuchtigkeit"
+  name_wind_chill:          "Windchill"
+  name_apparent_temp:       "Gefühlte Temperatur"
+  name_heat_index:          "Hitzeindex"
+  name_wet_bulb:            "Feuchtkugeltemperatur"
+  name_beaufort:            "Beaufort"
+  name_pressure_sea:        "Luftdruck (Meereshöhe)"
+  name_pressure_change_3h:  "Luftdruckänderung (3h)"
+  name_wind_dir_cardinal:   "Windrichtung (Himmelsrichtung)"
+  name_baro_trend:          "Luftdrucktendenz"
+
+  # --- rain_heater.yaml — rain & heater ---
+  name_rain_rate:           "Regenrate"
+  name_rain_total:          "Niederschlagsmenge"
+  name_comb_discharge:      "Regenkamm-Entladezeit"
+  name_rain_value:          "Regensensor-Wert"
+  name_bucket_cal:          "Regenwippe-Kalibrierung"
+  name_rain_threshold:      "Regenmelder-Schwelle"
+  name_comb_dry:            "Regenkamm-Trockenwert"
+  name_comb_wet:            "Regenkamm-Nasswert"
+  name_dew_margin:          "Heizung Taupunktabstand"
+  name_frost_temp:          "Heizung Frostschutz-Temperatur"
+  name_frost_band:          "Heizung Frostschutz-Band"
+  name_rain_heat_duty:      "Regen-Heizleistung"
+  name_heater_duty:         "Heizleistung"
+  name_rain_detector:       "Regenmelder"
+  name_heater_auto:         "Regenheizung Automatik"
+
+  # --- sensor_sht21.yaml — optional SHT21 ---
+  name_sht21_temp:          "SHT21-Temperatur"
+  name_sht21_humidity:      "SHT21-Luftfeuchtigkeit"

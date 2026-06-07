@@ -24,12 +24,12 @@ sensor:
   - platform: htu21d
     model: sht21
     temperature:
-      name: "SHT21 temperature"
+      name: "${name_sht21_temp}"
       id: sht21_temp
       web_server:
         sorting_group_id: wsg_comfort
         sorting_weight: 5
     humidity:
-      name: "SHT21 humidity"
+      name: "${name_sht21_humidity}"
       id: sht21_hum
     update_interval: 30s

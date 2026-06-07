@@ -35,6 +35,21 @@ jobs:
       - name: Run pre-commit
         uses: pre-commit/action@v3.0.1
 
+      - name: Check language packs are key-for-key identical
+        run: |
+          pip install --quiet pyyaml
+          python - <<'PY'
+          import sys, yaml
+          keys = {
+              code: set(yaml.safe_load(open(f"packages/lang_{code}.yaml"))["substitutions"])
+              for code in ("en", "de")
+          }
+          diff = keys["en"] ^ keys["de"]
+          if diff:
+              sys.exit(f"language packs are not key-for-key identical: {sorted(diff)}")
+          print(f"language packs: {len(keys['en'])} keys, identical")
+          PY
+
   # ---------------------------------------------------------------------------
   # Compile: build the firmware against the IN-REPO packages and component, not
   # the remote tag — so a PR validates the code it actually changes. The
@@ -97,6 +112,9 @@ jobs:
             project_name: "SoulSolistice.esphome_weatherman"
             timezone: Europe/Berlin
             board: d1_mini_pro
+            language: en
+            lang_en: !include packages/lang_en.yaml
+            lang_de: !include packages/lang_de.yaml
             mqtt_broker: "192.0.2.1"
             mqtt_topic_prefix: "wm"
             sht21_enabled: ${{ matrix.sht21 }}
@@ -132,6 +150,7 @@ jobs:
 
           packages:
             - !include packages/core.yaml
+            - \${ language == "de" and lang_de or lang_en }
             - !include packages/sensors_tfa.yaml
             - !include packages/sensors_env.yaml
             - !include packages/derived.yaml

@@ -70,20 +70,38 @@ and changing them implies a re-flash anyway.
 
 ## Repository layout
 
-```
+```text
 esphome_weatherman/
 ├── components/
-│   └── tfa_tx141w/          # ESPHome external component (drop-in)
-├── example/
-│   ├── weatherman.yaml      # complete reference configuration
-│   └── secrets.yaml.example
+│   └── tfa_tx141w/              # ESPHome external component
 ├── docs/
-│   ├── tuning.md            # TFA decoder trial-and-error guide
-│   ├── hardware-rain-sensor.md  # rain comb circuit analysis
-│   └── feels-like.md        # UTCI / Apparent Temperature discussion
+│   ├── development_notes.md
+│   ├── feels-like.md
+│   ├── hardware-rain-sensor.md
+│   └── tuning.md
+├── example/
+│   ├── secrets.yaml.example
+│   └── weatherman.yaml          # complete reference configuration
+├── packages/
+│   ├── core.yaml
+│   ├── derived.yaml
+│   ├── lang_de.yaml
+│   ├── lang_en.yaml
+│   ├── rain_heater.yaml
+│   ├── sensor_sht21.yaml
+│   ├── sensors_env.yaml
+│   └── sensors_tfa.yaml
+├── .github/
+├── .clang-format
+├── .editorconfig
+├── .gitignore
+├── .pre-commit-config.yaml
+├── .yamllint
 ├── CHANGELOG.md
-├── LICENSE                  # MIT
-└── README.md
+├── ESPHOME_GUIDELINES.md
+├── LICENSE
+├── README.md
+└── ruff.toml
 ```
 
 ## Quick start
@@ -176,9 +194,15 @@ external_components:
     components: [ tfa_tx141w ]
 ```
 
-The component supports multiple instances (since v0.3.0); useful if
+The component supports multiple instances; useful if
 you ever want to read two TFA heads from different GPIOs on the same
 board.
+
+## Firmware source pinning
+
+The example configuration defaults to tracking `main`, which follows the
+latest repository state. If you want reproducible builds, set
+`weatherman_ref` to a specific released tag instead of `main`.
 
 ## Hardware (WEATHERMAN 2.1)
 
@@ -193,7 +217,7 @@ Bauanleitung ver. 10:
 | BMP280 (P/T)                   | I²C @ 0x76         | GPIO5 / 4   |
 | BH1750 (illuminance)           | I²C @ 0x23         | GPIO5 / 4   |
 | WH-SP-RG rain bucket (reed)    | digital pulse      | GPIO14 (D5) |
-| Rain comb (active RC-discharge sense) | timed charge/discharge on D7; R6 100k bridges to D8's 12k pulldown as bias reference (see [hardware-rain-sensor.md](docs/hardware-rain-sensor.md)) | GPIO13 (D7) |
+| Rain comb (active RC-discharge sense) | timed charge/discharge on D7; R6 100k bridges to D8's 12k pulldown as bias reference (see [hardware-rain-sensor.md](docs/hardware-rain-sensor.md)) | GPIO13 (D7) / GPIO15 (D8 bias only) |
 | Rain comb heater               | PWM (low-side BJT) | GPIO0  (D3) |
 | DS18B20 optional shaded probe  | 1-wire             | GPIO2  (D4) |
 
@@ -334,4 +358,4 @@ mean radiant temperature, which this hardware doesn't measure. See
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+GPL v3. See [LICENSE](LICENSE).

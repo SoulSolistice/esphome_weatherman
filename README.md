@@ -358,4 +358,4 @@ mean radiant temperature, which this hardware doesn't measure. See
 
 ## License
 
-GPL v3. See [LICENSE](LICENSE).
+AGPL v3. See [LICENSE](LICENSE).

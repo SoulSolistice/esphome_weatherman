@@ -321,7 +321,7 @@ sensor:
 The on-device `Barometric trend` classifies the 3-hour pressure change into
 seven categories using NOAA-style thresholds:
 
-| Threshold (|Δp| hPa/3h) | Rising label        | Falling label       |
+| Threshold (|Δp| hPa/3h)  | Rising label        | Falling label       |
 |--------------------------|---------------------|---------------------|
 | < 0.1                    | stabil              | stabil              |
 | 0.1 – 1.35               | langsam steigend    | langsam fallend     |

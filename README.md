@@ -344,10 +344,8 @@ sensor:
 
 ### Sun position
 
-```yaml
-# Already provided by HA's built-in `sun` integration — no configuration needed.
-# Use sensor.sun_next_dawn, sensor.sun_next_setting, sun.sun.attributes.elevation, etc.
-```
+Already provided by HA's built-in `sun` integration — no configuration needed.
+Use `sensor.sun_next_dawn`, `sensor.sun_next_setting`, `sun.sun.attributes.elevation`, etc.
 
 ### Feels-like / UTCI
 

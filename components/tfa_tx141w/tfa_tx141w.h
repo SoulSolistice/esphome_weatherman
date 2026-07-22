@@ -86,11 +86,13 @@ class TFATX141W : public Component {
                                  // (rtl_433 spec is 8 = 4 cycles; raise further if noisy)
 
   // ----- ISR ring buffer -----
-  struct Edge {
-    uint32_t ts;    // micros() at the edge
-    uint8_t level;  // line state AFTER the edge (0 or 1)
-  };
-  volatile Edge edge_buf_[EDGE_BUF_SIZE];
+  // Stores only the edge timestamp. The post-edge line level was captured here
+  // and in the ISR (a digitalRead per edge) but never used: the decoder is
+  // polarity-agnostic (see process_pulse_ / the CRC try-both-orientations path),
+  // so `level` was pure overhead — 2 KB of dead SRAM (8-byte struct × 512) and a
+  // digitalRead on every interrupt. A plain uint32_t ring halves it to 2 KB and
+  // removes the ISR read.
+  volatile uint32_t edge_buf_[EDGE_BUF_SIZE];
   volatile uint32_t isr_w_ = 0;  // ISR write index
   // volatile because the ISR reads it for the overflow check while the main
   // loop writes it. Defensive even on single-core where the compiler is
@@ -128,7 +130,7 @@ class TFATX141W : public Component {
   uint32_t stat_syncs_ = 0;
   uint32_t stat_preamble_fail_ = 0;
   uint32_t stat_crc_fail_ = 0;
-  uint32_t stat_short_packets_ = 0;  // sync seen, < 130 pulses collected
+  uint32_t stat_short_packets_ = 0;  // sync seen, < 128 pulses collected
   uint32_t stat_total_edges_ = 0;
   uint32_t last_stats_ms_ = 0;
   uint32_t last_hist_ms_ = 0;
@@ -138,10 +140,10 @@ class TFATX141W : public Component {
   uint32_t hist_[HIST_N] = {0};
 
   // ----- Helpers -----
-  void process_pulse_(uint32_t width, uint8_t ended_level);
+  void process_pulse_(uint32_t width);
   void try_finish_packet_();
   void publish_packet_(const uint8_t *b);
-  void publish_status_(const std::string &s);
+  void publish_status_(const char *s);
   static uint8_t crc8(const uint8_t *data, size_t len, uint8_t poly, uint8_t init);
   void hist_add_(uint32_t width);
   void dump_histogram_();

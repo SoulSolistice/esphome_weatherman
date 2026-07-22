@@ -25,7 +25,6 @@ substitutions:
   device_description: "Native ESPHome replacement for the closed-source stall.biz firmware of the Weatherman 2.1."
   ## Project name MUST be "namespace.project" (dot-separated) or validation fails.
   project_name:       "SoulSolistice.esphome_weatherman"
-  timezone:           Europe/Berlin
 
   ## --- Display language (en | de) --------------------------------------------
   ## Selects the language of the entity DISPLAY NAMES. Drives the language pack

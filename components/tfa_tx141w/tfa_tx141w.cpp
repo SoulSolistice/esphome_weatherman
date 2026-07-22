@@ -17,7 +17,6 @@ void IRAM_ATTR TFATX141W::isr_trampoline(void *arg) {
 
 void IRAM_ATTR TFATX141W::on_edge() {
   uint32_t now = micros();
-  uint8_t lvl = (uint8_t)(digitalRead(this->pin_) & 1);
   uint32_t w = this->isr_w_;
   uint32_t next = (w + 1) & EDGE_BUF_MASK;
   // v2 fix: drop-NEWEST on overflow. The previous version advanced isr_w_
@@ -28,8 +27,7 @@ void IRAM_ATTR TFATX141W::on_edge() {
     this->isr_overflows_++;
     return;
   }
-  this->edge_buf_[w].ts = now;
-  this->edge_buf_[w].level = lvl;
+  this->edge_buf_[w] = now;
   this->isr_w_ = next;
 }
 
@@ -77,8 +75,7 @@ void TFATX141W::loop() {
   uint32_t w = this->isr_w_;
 
   while (this->isr_r_ != w) {
-    uint32_t ts = this->edge_buf_[this->isr_r_].ts;
-    uint8_t lvl = this->edge_buf_[this->isr_r_].level;
+    uint32_t ts = this->edge_buf_[this->isr_r_];
     this->isr_r_ = (this->isr_r_ + 1) & EDGE_BUF_MASK;
 
     this->stat_total_edges_++;
@@ -92,11 +89,10 @@ void TFATX141W::loop() {
     uint32_t width = ts - this->last_edge_ts_;
     this->last_edge_ts_ = ts;
 
-    // Level that JUST ENDED is the complement of the current (post-edge) level
-    uint8_t ended_level = lvl ^ 1;
-
-    this->hist_add_(width);
-    this->process_pulse_(width, ended_level);
+    // Histogram is a debug-only tuning aid; skip the bucketing work entirely
+    // when debug is off (the dump is already debug-gated below).
+    if (this->debug_) this->hist_add_(width);
+    this->process_pulse_(width);
   }
 
   // Periodic debug output (every 10s)
@@ -129,10 +125,10 @@ void TFATX141W::reset_decoder_() {
   this->pulse_count_ = 0;
 }
 
-void TFATX141W::process_pulse_(uint32_t width, uint8_t /*ended_level*/) {
+void TFATX141W::process_pulse_(uint32_t width) {
   // A very long pulse means line was idle for a while → start fresh.
   if (width >= this->t_reset_) {
-    if (this->state_ == ST_DATA && this->pulse_count_ >= 130) {
+    if (this->state_ == ST_DATA && this->pulse_count_ >= 128) {
       // We had a full-ish packet; try to decode before resetting.
       this->try_finish_packet_();
     }
@@ -142,9 +138,11 @@ void TFATX141W::process_pulse_(uint32_t width, uint8_t /*ended_level*/) {
 
   const uint32_t sync_lo = this->t_sync_ > this->t_tol_ ? this->t_sync_ - this->t_tol_ : 0;
   const uint32_t sync_hi = this->t_sync_ + this->t_tol_;
+  // Only the low edge of the short window and the high edge of the long window
+  // bound the data range; short_hi / long_lo were computed but never read (and
+  // at the default tolerance the two windows overlap, so they'd be inert
+  // anyway), so they're dropped.
   const uint32_t short_lo = this->t_short_ > this->t_tol_ ? this->t_short_ - this->t_tol_ : 0;
-  const uint32_t short_hi = this->t_short_ + this->t_tol_;
-  const uint32_t long_lo = this->t_long_ > this->t_tol_ ? this->t_long_ - this->t_tol_ : 0;
   const uint32_t long_hi = this->t_long_ + this->t_tol_;
 
   bool in_sync_range = (width >= sync_lo && width <= sync_hi);
@@ -189,7 +187,7 @@ void TFATX141W::process_pulse_(uint32_t width, uint8_t /*ended_level*/) {
         if (this->pulse_count_ < PULSE_BUF_SIZE) {
           this->pulse_buf_[this->pulse_count_++] = width;
         }
-        if (this->pulse_count_ >= 130) {
+        if (this->pulse_count_ >= 128) {
           this->try_finish_packet_();
           this->reset_decoder_();
         }
@@ -209,10 +207,15 @@ void TFATX141W::process_pulse_(uint32_t width, uint8_t /*ended_level*/) {
 }
 
 void TFATX141W::try_finish_packet_() {
-  if (this->pulse_count_ < 130) {
+  // 128 pulses = 64 bits, which fully populate bytes[0..7]. The 65th (stop) bit
+  // lands in bytes[8], which is read by neither the preamble check (b[0]) nor the
+  // CRC (over bytes 0..7), so it is not needed to validate or decode the frame.
+  // Requiring 130 discarded otherwise-decodable packets when the transmitter's
+  // final low half merged into the inter-packet gap (128/129 edges).
+  if (this->pulse_count_ < 128) {
     this->stat_short_packets_++;
     if (this->debug_) {
-      ESP_LOGD(TAG, "short packet: %u pulses (need 130)", this->pulse_count_);
+      ESP_LOGD(TAG, "short packet: %u pulses (need 128)", this->pulse_count_);
     }
     return;
   }
@@ -227,7 +230,7 @@ void TFATX141W::try_finish_packet_() {
   bool any_ambiguous = false;
 
   for (int i = 0; i < 65; i++) {
-    uint32_t a = this->pulse_buf_[2 * i];
+    uint32_t a = (2 * i < (int)this->pulse_count_) ? this->pulse_buf_[2 * i] : 0;
     uint32_t b = (2 * i + 1 < (int)this->pulse_count_) ? this->pulse_buf_[2 * i + 1] : 0;
     bool a_long = (a >= mid);
     bool b_long = (b >= mid);
@@ -290,7 +293,9 @@ void TFATX141W::try_finish_packet_() {
 #ifdef USE_TEXT_SENSOR
     if (this->sensor_pkt_hex_ != nullptr) this->sensor_pkt_hex_->publish_state(buf);
 #endif
-    this->publish_status_(std::string("decode fail: ") + (err_norm ? err_norm : "?") + "/" + (err_inv ? err_inv : "?"));
+    char stbuf[48];
+    std::snprintf(stbuf, sizeof(stbuf), "decode fail: %s/%s", err_norm ? err_norm : "?", err_inv ? err_inv : "?");
+    this->publish_status_(stbuf);
   }
 }
 
@@ -316,8 +321,19 @@ void TFATX141W::publish_packet_(const uint8_t *b) {
   if (this->sensor_pkt_hex_ != nullptr) this->sensor_pkt_hex_->publish_state(buf);
 #endif
 
-  if (this->sensor_id_ != nullptr) this->sensor_id_->publish_state(id);
-  if (this->sensor_battery_ != nullptr) this->sensor_battery_->publish_state(battery_low ? 0 : 100);
+  // Both of these are constant for a given head (the ID never changes; the
+  // battery flag flips at most twice in the sensor's life). Publishing them on
+  // every packet re-serialized two unchanged values to the API + web_server SSE
+  // ~2,800×/day each. Dedup against the last state (starts NaN, so the first
+  // real value always goes out; HA reconnects re-read the retained state).
+  if (this->sensor_id_ != nullptr) {
+    float id_f = (float)id;
+    if (this->sensor_id_->state != id_f) this->sensor_id_->publish_state(id_f);
+  }
+  if (this->sensor_battery_ != nullptr) {
+    float bat = battery_low ? 0.0f : 100.0f;
+    if (this->sensor_battery_->state != bat) this->sensor_battery_->publish_state(bat);
+  }
 
   if (type == 1) {
     // Temperature + humidity
@@ -355,7 +371,7 @@ void TFATX141W::publish_packet_(const uint8_t *b) {
   }
 }
 
-void TFATX141W::publish_status_(const std::string &s) {
+void TFATX141W::publish_status_(const char *s) {
 #ifdef USE_TEXT_SENSOR
   // Dedup: only re-publish on an actual change. With the status reduced to a
   // low-cardinality token ("OK" / "decode fail: …"), steady-state operation
@@ -364,7 +380,8 @@ void TFATX141W::publish_status_(const std::string &s) {
   // which is the point on a heap-starved ESP8266. Comparing against the stored
   // state is safe: it starts empty and we never publish "", so the first real
   // status always goes out, and HA reconnects re-read the stored state rather
-  // than relying on a fresh publish.
+  // than relying on a fresh publish. (std::string::operator!= and publish_state
+  // both take const char*, so no std::string is constructed for the compare.)
   if (this->sensor_status_ != nullptr && this->sensor_status_->state != s) this->sensor_status_->publish_state(s);
 #endif
 }

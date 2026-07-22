@@ -13,8 +13,8 @@ the rtl_433 protocol in software. No SDR, no RF receiver, no calls home.
 
 - Full feature parity with the original firmware's `wm_*` variables
   (see [parity table](#wm_-variable-parity) below).
-- All measurements published via the native ESPHome / Home Assistant API and
-  optionally MQTT (for existing subscribers to the `wm/*` topic tree).
+- All measurements published via the native, encrypted ESPHome / Home
+  Assistant API.
 - **Built-in web UI** on port 80 for standalone access without
   Home Assistant. Useful for tuning thresholds, viewing live values,
   and as an OTA fallback.
@@ -26,9 +26,9 @@ the rtl_433 protocol in software. No SDR, no RF receiver, no calls home.
 
 ## Runtime configuration
 
-The following calibration parameters are exposed as runtime `number:` entities
-and can be tuned without re-flashing via Home Assistant, the on-device web UI,
-or MQTT:
+The following runtime `number:` entities (field calibration plus the manual
+heater control) can be adjusted without re-flashing, via Home Assistant or the
+on-device web UI:
 
 | Number entity                       | Original firmware param | Default |
 |-------------------------------------|-------------------------|---------|
@@ -42,25 +42,28 @@ or MQTT:
 | Rain comb dry baseline              | (new) per-unit comb cal | 6 µs   |
 | Rain comb wet saturation            | (new) per-unit comb cal | 67 µs  |
 | Rain heating duty                   | (new) heater % while rain detected | 100 % |
+| Wind gust window                    | (new) gust-max reset window     | 10 min  |
+| Heater duty (manual)                | (new) manual heater % (auto off) | 0 %    |
 
 The two rain-comb calibration values are per-unit: the comb's active-sense
 discharge time depends on C1 tolerance and the input threshold, so they're
 calibrated in the field rather than baked into the firmware. See
 [hardware-rain-sensor.md](docs/hardware-rain-sensor.md) for the procedure.
 
-Each value restores across reboots. Flash wear is negligible because
-user-initiated config changes happen only a handful of times in a
-device's lifetime.
+Each value restores across reboots — with one deliberate exception: the manual
+**Heater duty** slider resets to 0 on boot (fail-safe; it isn't a persisted
+setting). Flash wear is negligible because user-initiated config changes happen
+only a handful of times in a device's lifetime.
 
-Other parameters (TFA decoder timings, network identity, MQTT broker
-address) remain as YAML substitutions because they're set at flash time
-and changing them implies a re-flash anyway.
+Other parameters (TFA decoder timings, network identity) remain as YAML
+substitutions because they're set at flash time and changing them implies a
+re-flash anyway.
 
 ## Scope and non-goals
 
 - **CCU interface is not implemented.** The original firmware optionally
   pushes values to a Homematic CCU. This project explicitly drops that
-  path; everything goes through ESPHome's HA-native API and/or MQTT.
+  path; everything goes through ESPHome's HA-native API.
 - **Sun position (elevation, azimuth, minutes-to-sunrise) is not
   computed on-device.** Delegate to Home Assistant's
   [`sun`](https://www.home-assistant.io/integrations/sun/) integration.
@@ -113,7 +116,7 @@ git clone https://github.com/SoulSolistice/esphome_weatherman.git
 cd esphome_weatherman/example
 cp secrets.yaml.example secrets.yaml
 # edit secrets.yaml with WiFi credentials
-# edit weatherman.yaml: MQTT broker, altitude, static IP, etc. as desired
+# edit weatherman.yaml: display language, altitude, static IP, etc. as desired
 ```
 
 ### 2. First flash
@@ -157,18 +160,18 @@ over the air.
 
 ### 3. Tune the TFA decoder if needed
 
-Watch the logs: `esphome logs weatherman.yaml`. You should see a
-pulse-width histogram every 30 s; once `packets_valid` starts climbing,
-the decoder is locked in. If not, follow the
-[trial-and-error guide](docs/tuning.md).
+The pulse-width histogram and per-stage stats are **off by default** (they're
+gated by the decoder's own debug flag, not the logger level). To see them, set
+`tfa_debug: "true"` in the entry file's substitutions and re-apply, then watch
+the logs: `esphome logs weatherman.yaml`. You should get a histogram every 30 s;
+once `packets_valid` starts climbing, the decoder is locked in. If not, follow
+the [trial-and-error guide](docs/tuning.md).
 
 ### 4. Lock down
 
-Once everything's stable:
-
-- In `weatherman.yaml`: set `tfa_tx141w.debug: false` and
-  `logger.level: INFO`.
-- Apply via OTA: `esphome run weatherman.yaml`.
+Once everything's stable, set `tfa_debug: "false"` again in `weatherman.yaml`
+(the shipped default; silences the histogram/stats) and re-apply over the air:
+`esphome run weatherman.yaml`. The logger already ships at `INFO`.
 
 ## Consuming this repo as an external component
 
@@ -241,9 +244,10 @@ Bauanleitung ver. 10:
 
 ## wm_* variable parity
 
-The original firmware exposed values both as MQTT topics and as CCU
-system variables. The CCU path is out of scope here; the table below
-maps each `wm_*` variable to its ESPHome implementation.
+The original firmware exposed values as MQTT topics and as CCU system
+variables. Both transports are out of scope here — this node is
+ESPHome/HA-native — so the table below maps each `wm_*` variable to its
+ESPHome implementation.
 
 | Original `wm_*` variable      | Type     | Unit  | Implementation                                     |
 |-------------------------------|----------|-------|---------------------------------------------------|

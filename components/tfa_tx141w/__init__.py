@@ -6,6 +6,7 @@ tapped before the modulator in the WEATHERMAN 2.1 hardware.
 
 import esphome.codegen as cg
 import esphome.config_validation as cv
+from esphome import pins
 from esphome.const import CONF_ID
 
 CODEOWNERS = ["@SoulSolistice"]
@@ -28,7 +29,12 @@ TFATX141W = tfa_tx141w_ns.class_("TFATX141W", cg.Component)
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.declare_id(TFATX141W),
-        cv.Required(CONF_PIN): cv.int_range(min=0, max=39),
+        # Chip-aware validation: resolves a pin name/number and range-checks it
+        # against the *target* chip (on ESP8266 this rejects GPIO>17 and the
+        # flash pins), returning the bare GPIO number the C++ set_pin(uint8_t)
+        # consumes. The old cv.int_range(0, 39) was an ESP32 range and silently
+        # accepted impossible pins (e.g. GPIO25) on this ESP8266-only board.
+        cv.Required(CONF_PIN): pins.internal_gpio_input_pin_number,
         cv.Optional(CONF_DEBUG, default=False): cv.boolean,
         cv.Optional(CONF_T_SYNC, default=833): cv.int_range(min=100, max=5000),
         cv.Optional(CONF_T_SHORT, default=208): cv.int_range(min=50, max=1000),

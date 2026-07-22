@@ -11,16 +11,18 @@ rediscovered.
 ## Architecture: how the files fit together
 
 The config is split into a thin per-device **entry file** (`example/weatherman.yaml`)
-and five remote **packages** (`packages/*.yaml`) pulled from GitHub by tag, plus
-the `tfa_tx141w` C++ component pulled via `external_components` from the same
-repo and tag.
+and five functional **packages** (`packages/*.yaml`) — plus a display-language
+pack (`lang_en.yaml` / `lang_de.yaml`, one selected by the `language`
+substitution) and an optional `sensor_sht21.yaml` — all pulled from GitHub by
+tag, plus the `tfa_tx141w` C++ component pulled via `external_components` from
+the same repo and tag.
 
-- **entry file** — identity, secrets (`wifi`/`api`/`ota`), MQTT, the platform
-  block, and the `packages:` + `external_components:` pointers. Both pointers
-  read a single `weatherman_ref` substitution, so upgrading the firmware is one
-  edit: bump the tag.
+- **entry file** — identity, secrets (`wifi`/`api`/`ota`), display `language`,
+  the platform block, and the `packages:` + `external_components:` pointers.
+  Both pointers read a single `weatherman_ref` substitution, so upgrading the
+  firmware is one edit: bump the tag.
 - **core.yaml** — logger, debug hub, safe mode, captive portal, web server +
-  sorting groups, time, shared globals, and generic device diagnostics.
+  sorting groups, shared globals, and generic device diagnostics.
 - **sensors_tfa.yaml** — TFA decoder config, wind/humidity/temperature sensors,
   gust tracking, decoder diagnostics. Ships the TFA timing defaults as
   substitutions.
@@ -30,6 +32,12 @@ repo and tag.
   heat index, wet bulb, Beaufort, sea-level pressure, 3h change + trend.
 - **rain_heater.yaml** — rain bucket/comb sensors, rain detector, PWM heater
   output, auto-mode switch, calibration/threshold settings, control loops.
+- **lang_en.yaml / lang_de.yaml** — entity display names only, as `${name_*}`
+  substitutions. Both packs are key-for-key identical (CI enforces this); the
+  `language` substitution picks one. State values stay untranslated (HA
+  localizes those per viewer).
+- **sensor_sht21.yaml** — optional shaded SHT21/HTU21D temp+humidity module,
+  included only when `sht21_enabled: true`.
 
 Cross-package references (e.g. `derived.yaml`'s sea-level pressure reads
 `pressure_hpa` from `sensors_env.yaml`, the heater loop in `rain_heater.yaml`
@@ -119,8 +127,10 @@ group shows only the canonical value.
 The auto-control interval always evaluates while auto mode is on so the heater
 receives an explicit duty every cycle. Putting the rain check on a YAML
 `condition:` would skip the whole `then:` and latch the PWM at its last value.
-A NaN outdoor temperature commands the heater explicitly off (never latches at
-the last value).
+A NaN outdoor temperature skips only the temperature-dependent terms (frost and
+anti-dew); rain heating still applies (it's confirmed by the comb, independent
+of the temp sensor). Every branch writes an explicit duty, so the PWM never
+latches at a stale value even when a term is skipped.
 
 ---
 
@@ -148,7 +158,8 @@ reasoning is auditable and nobody naively flips the gust max to restored.
 
 - **`std::array` for the ISR ring buffer.** Rejected: `std::array`'s `operator[]`
   is not `volatile`-qualified, so a `volatile std::array` for an ISR↔loop buffer
-  forces `const_cast` gymnastics. The raw `volatile Edge[]` is the correct tool.
+  forces `const_cast` gymnastics. The raw `volatile uint32_t[]` (just the edge
+  timestamp — the post-edge level was dead and removed) is the correct tool.
 - **`accuracy_decimals: 4` to "smooth" the 3h pressure trend.** Rejected: the
   trend is computed on-device against `pressure_3h_ago`, not by HA's derivative
   integration, and `accuracy_decimals` is a display hint that doesn't change the

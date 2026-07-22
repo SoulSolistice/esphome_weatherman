@@ -78,6 +78,11 @@ sensor:
     web_server:
       sorting_group_id: wsg_rain
       sorting_weight: 20
+    filters:
+      # Pushed every 2s by the sense interval. Diagnostic-only (nothing reads its
+      # .state), so a 30s average both cuts the ~43k publishes/day to ~2.9k and
+      # gives a steadier number to calibrate cfg_comb_dry_us / cfg_comb_wet_us against.
+      - throttle_average: 30s
 
   - platform: template
     name: "${name_rain_value}"          # wm_regensensor_wert
@@ -90,8 +95,29 @@ sensor:
     web_server:
       sorting_group_id: wsg_rain
       sorting_weight: 10
+    filters:
+      # Feeds the protective rain_detector, so it must publish promptly on any
+      # real change — but not re-emit an unchanged value every 2s. Safe because
+      # the mapping is quantized: discharge time is integer µs (median-of-7) and
+      # ~1.64%/µs, so the smallest possible change is ~1.64% > 0.5. delta (strict
+      # '>') therefore passes every genuine transition — including the crossing of
+      # cfg_rain_threshold_pct that flips rain_detector — while dropping identical
+      # repeats. rain_detector reads this post-filter .state, so it sees crossings
+      # within one 2s cycle. heartbeat refreshes HA during long dry spells.
+      - delta: 0.5
+      - heartbeat: 60s
 
 number:
+  ## NOTE: changing this rescales the LIFETIME total retroactively. The `total:`
+  ## filter below multiplies the raw tick count by the *current* value, so a
+  ## recalibration steps the whole accumulated total at once. Home Assistant's
+  ## total_increasing treats that step (and the reboot reset — the pulse_counter
+  ## total is RAM-only and starts at 0 each boot) as a meter reset, so it
+  ## self-corrects after one glitched interval. This is left as-is rather than
+  ## accumulating mm into a restored global: that would write flash on every rain
+  ## tick (hundreds/day in a storm), exactly the wear pattern this project avoids
+  ## elsewhere (see wind_gust_max_kmh / wifi_disconnect_count). Practical upshot:
+  ## calibrate this once, before you start trusting the total.
   - platform: template
     name: "${name_bucket_cal}"
     id: cfg_rain_mm_per_tick
@@ -210,15 +236,13 @@ number:
   ## reintroduces 1 kHz ripple, which sits just below the ~1.6 kHz R6*C1 corner
   ## and is only lightly attenuated (~15%), so re-verify the comb reading isn't
   ## perturbed if you reduce it (the median-of-7 absorbs most of it). Set to 0
-  ## to disable rain-driven
-  ## heating entirely (frost + anti-dew still run).
+  ## to disable rain-driven heating entirely (frost + anti-dew still run).
   ##
   ## There is deliberately NO time cap: heating lasts the entire detected-wet
   ## period (energy cost is small — the heater is low-power). The trade-off is
-  ## that a comb that
-  ## reads wet forever — e.g. a corrosion/leakage fault — would hold the heater
-  ## on indefinitely. If you want a runaway guard, the clean spot is a timed
-  ## script gating this term; ask and it's a few lines.
+  ## that a comb that reads wet forever — e.g. a corrosion/leakage fault — would
+  ## hold the heater on indefinitely. If you want a runaway guard, the clean spot
+  ## is a timed script gating this term; ask and it's a few lines.
   - platform: template
     name: "${name_rain_heat_duty}"
     id: cfg_rain_heat_pct
@@ -238,6 +262,14 @@ number:
   ## loop to reflect what the auto logic is driving. Manually moving the
   ## slider while auto is on has no effect (the next auto cycle overwrites).
   ## Turn auto OFF first if you want manual control.
+  ##
+  ## NOT restored across reboots (reset-to-0): TemplateNumber::setup only
+  ## publishes the restored value, it never fires set_action, so a restored
+  ## non-zero duty would display on the slider while the PWM output actually
+  ## sits at 0 — a silent mismatch (and with auto OFF, the heater wouldn't run
+  ## at the displayed duty until the slider was nudged). Starting at 0 every
+  ## boot is the fail-safe, self-consistent state; the auto loop re-drives it
+  ## within 60s whenever auto is on.
   - platform: template
     name: "${name_heater_duty}"
     id: rain_heater_duty
@@ -247,7 +279,7 @@ number:
     step: 5
     initial_value: 0
     optimistic: true
-    restore_value: true
+    restore_value: false
     unit_of_measurement: "%"
     mode: slider
     web_server:
@@ -356,6 +388,13 @@ switch:
       - logger.log: "Rain heater AUTO enabled"
     turn_off_action:
       - logger.log: "Rain heater AUTO disabled - heater forced off"
+      ## This explicit PWM-0 is load-bearing — do NOT remove it assuming the
+      ## number.set below handles it. That number.set fires rain_heater_duty's
+      ## set_action, which is gated on `switch.is_off: rain_heater_auto`. But an
+      ## optimistic template switch fires this turn_off trigger BEFORE it
+      ## publishes the new OFF state, so that condition can still observe ON and
+      ## skip its output write. The line below is what actually forces the heater
+      ## off; the number.set just syncs the slider readout to 0.
       - output.set_level:
           id: rain_heater_pwm
           level: 0

@@ -8,10 +8,6 @@
 ## (override via substitutions / runtime number entities instead).
 ## ======================================================================
 
-substitutions:
-  # Default; overridden by the device entry file.
-  timezone: Europe/Berlin
-
 logger:
   level: INFO                     # was DEBUG; lowered to cut log churn + heap pressure
   baud_rate: 0                    # USB is sealed in the box; rely on API/web for logs
@@ -115,10 +111,6 @@ web_server:
     - id: wsg_heater
       name: "${name_grp_heater}"
       sorting_weight: 60
-time:
-  - platform: sntp
-    id: ntp_time
-    timezone: ${timezone}
 ## ============================================================
 ## Globals (for gust tracking and barotrend reference)
 ## ============================================================
@@ -184,6 +176,12 @@ sensor:
     icon: "mdi:restart"
     update_interval: 60s
     lambda: 'return id(boot_count);'
+    filters:
+      # boot_count only moves at boot; suppress the identical 60s re-publishes.
+      # delta uses a strict '>', so 0.5 passes a +1 increment while blocking the
+      # unchanged polls. heartbeat still refreshes HA's "last updated" hourly.
+      - delta: 0.5
+      - heartbeat: 60min
 
   - platform: template
     name: "${name_wifi_disconnects}"
@@ -194,6 +192,11 @@ sensor:
     icon: "mdi:wifi-off"
     update_interval: 60s
     lambda: 'return id(wifi_disconnect_count);'
+    filters:
+      # Publish only when the session disconnect count actually increments
+      # (delta strict '>' → 0.5 passes +1); heartbeat refreshes hourly otherwise.
+      - delta: 0.5
+      - heartbeat: 60min
 
   ## --- Heap health -----------------------------------------------------------
   ## Instrumentation for the LoadProhibited (EXCVADDR=0) crashes, which are

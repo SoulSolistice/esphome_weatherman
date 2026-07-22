@@ -16,6 +16,14 @@ concurrency:
 permissions:
   contents: read
 
+# Pin ESPHome to the version running on the Home Assistant add-on that flashes
+# these devices, so CI validates what will actually ship. Bump this in lockstep
+# when you upgrade the add-on. (Previously `pip install esphome` pulled "latest",
+# so a new ESPHome release could change schema/codegen behavior in CI relative
+# to the OTA-tested build.)
+env:
+  ESPHOME_VERSION: "2026.6.4"
+
 jobs:
   # ---------------------------------------------------------------------------
   # Lint: run the exact same pre-commit suite developers run locally.
@@ -26,9 +34,12 @@ jobs:
     name: Lint (pre-commit)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Node-24 action majors: GitHub force-migrated runners to Node 24 on
+      # 2026-06-16 and removes Node 20 around 2026-09, so the older v4/v5 pins
+      # (Node 20) now warn and will hard-fail this autumn.
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -52,13 +63,15 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Compile: build the firmware against the IN-REPO packages and component, not
-  # the remote tag — so a PR validates the code it actually changes. The
-  # optional SHT21 is exercised both on and off to cover the conditional-include
-  # branch. A schema regression or a C++ error in the component fails here
-  # before it can reach a tag (and therefore before it can OTA to devices).
+  # the remote tag — so a PR validates the code it actually changes. The matrix
+  # exercises the optional SHT21 both on and off (the conditional-include
+  # branch) AND both language packs (so a re-diverged German pack — a "/" in a
+  # name, a >120-char name, a URL-scheme clash — fails CI instead of only
+  # surfacing on a German device). A schema regression or a C++ error in the
+  # component fails here before it can reach a tag (and OTA to devices).
   # ---------------------------------------------------------------------------
   compile:
-    name: Compile (sht21=${{ matrix.sht21 }})
+    name: Compile (sht21=${{ matrix.sht21 }}, lang=${{ matrix.language }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -67,17 +80,18 @@ jobs:
         # parse as real booleans (a quoted "false" would be truthy in the
         # Jinja conditional and wrongly include the package).
         sht21: [true, false]
+        language: [en, de]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       # Cache the PlatformIO toolchain + framework and the ESPHome build dir;
       # the first run is slow (toolchain download), later runs are fast.
       - name: Cache PlatformIO and ESPHome build
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.platformio
@@ -89,19 +103,25 @@ jobs:
       - name: Install ESPHome
         run: |
           python -m pip install --upgrade pip
-          pip install esphome
+          pip install "esphome==${ESPHOME_VERSION}"
 
       # Generate a CI entry file at the repo root that:
       #   * uses LOCAL package includes + LOCAL external_components (this PR's
       #     code), instead of pulling the remote tag;
       #   * needs no secrets (plain api/ota, no encryption);
-      #   * bakes the matrix sht21 value in as a real YAML boolean.
+      #   * bakes the matrix sht21/language values in (sht21 as a real YAML
+      #     boolean; language as the pack selector).
       #
       # `packages:` is a top-level LIST (the mapping/single-include forms are
       # deprecated as of 2026.7 and the conditional expression is only reliable
       # as a list entry). For LOCAL includes the SHT21 file is pre-included into
       # a substitution (`sht21_pkg`), because !include is resolved before the
       # ${...} expression; the conditional then selects that content or {}.
+      #
+      # Mirrors the shipping shape: wifi + recovery AP and NO mqtt (MQTT was
+      # removed from the product; compiling it here built dead AsyncMqttClient
+      # code and a broker the device never uses). `ap:` also satisfies
+      # captive_portal, silencing its no-AP validation warning.
       - name: Generate CI config
         run: |
           cat > ci-compile.yaml <<EOF
@@ -110,13 +130,10 @@ jobs:
             friendly_name: Weatherman CI
             device_description: "CI build"
             project_name: "SoulSolistice.esphome_weatherman"
-            timezone: Europe/Berlin
             board: d1_mini_pro
-            language: en
+            language: ${{ matrix.language }}
             lang_en: !include packages/lang_en.yaml
             lang_de: !include packages/lang_de.yaml
-            mqtt_broker: "192.0.2.1"
-            mqtt_topic_prefix: "wm"
             sht21_enabled: ${{ matrix.sht21 }}
             sht21_pkg: !include packages/sensor_sht21.yaml
 
@@ -143,10 +160,9 @@ jobs:
             ssid: "ci-ssid"
             password: "ci-password"
             min_auth_mode: WPA2
-
-          mqtt:
-            broker: \${mqtt_broker}
-            topic_prefix: \${mqtt_topic_prefix}
+            ap:
+              ssid: "weatherman-ci recovery"
+              password: "ci-recovery-pass"
 
           packages:
             - !include packages/core.yaml
@@ -173,3 +189,50 @@ jobs:
 
       - name: Compile firmware
         run: esphome compile ci-compile.yaml
+
+  # ---------------------------------------------------------------------------
+  # Validate the REAL entry file through the remote-pull plumbing users depend
+  # on: git `packages:` + `external_components:`, the conditional-include
+  # expression, and the `lang_${language}` path interpolation. The compile job
+  # above swaps all of that for local includes, so this is the ONLY job that
+  # exercises the remote package machinery and the entry file as shipped.
+  #
+  # Runs only when the ref IS main (push to main, or a manual dispatch from
+  # main): the entry file pulls packages at `ref: main`, so this is exactly the
+  # condition under which remote main == the checked-out tree. On a PR (or a
+  # dispatch from a feature branch) it would validate STALE main against new
+  # local code, which is misleading — hence skipped there. `config` only (no
+  # compile): the compile job already covers codegen; this guards merge/plumbing.
+  # ---------------------------------------------------------------------------
+  validate-entry:
+    name: Validate entry file (remote packages)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install ESPHome
+        run: |
+          python -m pip install --upgrade pip
+          pip install "esphome==${ESPHOME_VERSION}"
+
+      # Dummy, non-secret values so the !secret-bearing blocks resolve. The API
+      # key must be a real base64 32-byte value, so generate one at run time.
+      - name: Write dummy secrets
+        working-directory: example
+        run: |
+          cat > secrets.yaml <<EOF
+          wifi-ssid: "ci-ssid"
+          wifi-password: "ci-password"
+          wifi-ap-password: "ci-recovery-pass"
+          esphome-api: "$(openssl rand -base64 32)"
+          esphome-ota: "ci-ota-pass"
+          EOF
+
+      - name: Validate entry file config
+        working-directory: example
+        run: esphome config weatherman.yaml

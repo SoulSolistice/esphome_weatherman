@@ -4,6 +4,12 @@ You don't need a scope. The decoder logs everything you'd otherwise read off
 one: a 30 s pulse-width histogram, per-stage failure counters, and raw bytes
 of every decoded (or attempted-decode) packet.
 
+> **Enable the debug logs first.** The histogram, the stats line, and the
+> raw-byte dumps used throughout this guide are gated by the decoder's *own*
+> debug flag (not the logger level) and ship **off**. Set `tfa_debug: "true"`
+> in the entry file's substitutions and re-apply before expecting any of this
+> output — then set it back to `"false"` when the decoder is locked in.
+
 ## How the protocol works
 
 The TFA Spring Breeze head talks to its base station with a 65-bit OOK
@@ -84,7 +90,7 @@ If `syncs > 0` and `valid = 0` after several minutes:
   onto noise. Try 10 or 12.
 - **`crc_fail >> preamble_fail`**: bit thresholding is wrong on individual
   bits. Tighten `t_tolerance` to 100 µs.
-- **`short` counter climbs**: packets cut off before 130 pulses. Check
+- **`short` counter climbs**: packets cut off before 128 pulses. Check
   `isr_overflows`; if non-zero, something else on the board is hogging
   IRQs (rare on ESP8266 with this code).
 

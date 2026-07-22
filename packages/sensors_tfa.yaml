@@ -47,7 +47,13 @@ sensor:
       id: wind_head_temp
       entity_category: diagnostic
       filters:
-        - filter_out: nan
+        ## The component never publishes NaN, so the old `filter_out: nan` was
+        ## dead. Replace it with a timeout that INJECTS NaN when the head falls
+        ## silent for 5 min (≈10 missed ~31s packets). This is what makes the
+        ## outdoor_temp fallback in sensors_env.yaml correct: without it, a dead
+        ## head leaves this at its last value forever and outdoor_temp keeps
+        ## returning a frozen "reading" that frost/dew/derived math would act on.
+        - timeout: 5min
       ## This is the TFA's internal NTC, inside the (passively vented but
       ## not aspirated) housing. On calm sunny days it reads 1-2°C high vs.
       ## a properly shaded probe. The canonical "Outdoor temperature" below
@@ -61,7 +67,9 @@ sensor:
         sorting_group_id: wsg_weather
         sorting_weight: 20
       filters:
-        - filter_out: nan
+        # NaN on 5-min silence → dewpoint/abs-humidity/etc. short-circuit to NaN
+        # rather than computing off a stale humidity (old filter_out was dead).
+        - timeout: 5min
     wind_speed:
       name: "${name_wind_speed}"
       id: wind_speed_kmh
@@ -71,13 +79,18 @@ sensor:
         sorting_group_id: wsg_weather
         sorting_weight: 60
       filters:
-        - filter_out: nan
+        ## Emit NaN if the head goes silent for 5 min (the component never emits
+        ## NaN, so the old `filter_out: nan` here was dead). Placed FIRST so a
+        ## dead head propagates NaN through the whole chain and every downstream
+        ## isnan() guard engages instead of acting on a frozen last reading.
+        - timeout: 5min
         ## Capture the TRUE gust here — the raw instantaneous sample, BEFORE the
         ## smoothing average below. The previous on_value hook fired on the
         ## already-averaged value and so systematically under-reported gusts
-        ## (wm_wind_spitze is the raw peak, not the peak of the mean). filter_out
-        ## nan precedes this filter, so x is always a real number; the lambda
-        ## returns x unchanged so the smoothing filter still sees every sample.
+        ## (wm_wind_spitze is the raw peak, not the peak of the mean). NaN-safe:
+        ## on a timeout x is NaN, and `NaN > max` is false, so the running gust
+        ## max is preserved (not corrupted); `return x` forwards the NaN so the
+        ## 5-sample average also goes NaN, matching the dead-head state.
         - lambda: |-
             if (x > id(wind_gust_max_kmh)) id(wind_gust_max_kmh) = x;
             return x;
@@ -105,12 +118,19 @@ sensor:
     packets_valid:
       name: "${name_tfa_packets_valid}"
       entity_category: diagnostic
+      # Published from C++ on every valid packet (~one per 31s). Monotonic, so
+      # delta/dedup don't apply; throttle caps the fan-out to ≤1/min. The C++
+      # counter keeps accumulating, so the total stays correct — only the
+      # publish cadence is reduced.
+      filters: [throttle: 60s]
     packets_invalid:
       name: "${name_tfa_packets_invalid}"
       entity_category: diagnostic
+      filters: [throttle: 60s]   # bursty on noise; ≤1 publish/min, total preserved
     sync_detections:
       name: "${name_tfa_sync}"
       entity_category: diagnostic
+      filters: [throttle: 60s]   # fires ~every packet; ≤1 publish/min
 
   ## --- Wind gust (peak in last N minutes) ---
   - platform: template
@@ -202,7 +222,8 @@ interval:
       - lambda: |-
           static uint32_t last_reset_ms = 0;
           const float win_min = id(cfg_gust_window_min).state;
-          if (std::isnan(win_min) || win_min <= 0.0f) return;  // unset/0 disables reset
+          // Guard the pre-restore NaN; min_value is 1 so 0 isn't UI-reachable.
+          if (std::isnan(win_min) || win_min <= 0.0f) return;
           const uint32_t window_ms = (uint32_t)(win_min * 60000.0f);
           const uint32_t now = millis();
           if (now - last_reset_ms >= window_ms) {

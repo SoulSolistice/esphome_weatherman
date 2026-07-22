@@ -158,7 +158,8 @@ sensor:
       const float v = id(wind_speed_kmh).state;
       if (std::isnan(v)) return NAN;
       const float ms = v / 3.6f;
-      return roundf(powf(ms / 0.836f, 2.0f/3.0f));
+      const float bft = roundf(powf(ms / 0.836f, 2.0f/3.0f));
+      return bft > 12.0f ? 12.0f : bft;   // Beaufort scale tops out at 12 (the power law runs past it above ~33 m/s)
 
   ## wm_barometer - sea-level corrected pressure
   ## Altitude now sourced from the runtime cfg_altitude_m number.
@@ -233,7 +234,7 @@ text_sensor:
       sorting_weight: 30
     lambda: |-
       const float d = id(pressure_change_3h).state;
-      if (std::isnan(d)) return std::string("stabil");
+      if (std::isnan(d)) return std::string("");  // no data → unknown, NOT "stabil" (which is a real calm state)
       const float a = fabsf(d);
       if (a < 0.1f)  return std::string("stabil");
       const bool rising = d > 0.0f;
@@ -246,4 +247,5 @@ interval:
   - interval: 3h
     then:
       - lambda: |-
-          id(pressure_3h_ago) = id(pressure_sealevel_hpa).state;
+          const float p = id(pressure_sealevel_hpa).state;
+          if (!std::isnan(p)) id(pressure_3h_ago) = p;  // don't snapshot NaN — it would blank the trend for 3h
